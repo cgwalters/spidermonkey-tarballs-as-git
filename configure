@@ -1,0 +1,5 @@
+#!/bin/sh
+dnl http://people.gnome.org/~walters/docs/build-api.txt
+echo \#buildapi-variable-no-builddir >/dev/null
+cd js/src
+exec ./configure "$@"
