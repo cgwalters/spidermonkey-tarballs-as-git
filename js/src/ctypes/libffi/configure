@@ -752,6 +752,7 @@ FFI_DEBUG_FALSE
 FFI_DEBUG_TRUE
 TARGETDIR
 TARGET
+sys_symbol_underscore
 HAVE_LONG_DOUBLE
 ALLOCA
 PA64_HPUX_FALSE
@@ -11255,7 +11256,7 @@ case "$host" in
   mips-sgi-irix5.* | mips-sgi-irix6.*)
 	TARGET=MIPS; TARGETDIR=mips
 	;;
-  mips*-*-linux*)
+  mips*-*linux*)
 	# Support 128-bit long double for NewABI.
 	HAVE_LONG_DOUBLE='defined(__mips64)'
 	TARGET=MIPS; TARGETDIR=mips
@@ -11277,7 +11278,7 @@ case "$host" in
   powerpc-*-aix* | rs6000-*-aix*)
 	TARGET=POWERPC_AIX; TARGETDIR=powerpc
 	;;
-  powerpc-*-freebsd*)
+  powerpc-*-freebsd* | powerpc-*-openbsd*)
 	TARGET=POWERPC_FREEBSD; TARGETDIR=powerpc
 	;;
   powerpc*-*-rtems*)
@@ -12275,10 +12276,10 @@ if test "${libffi_cv_as_x86_pcrel+set}" = set; then :
   $as_echo_n "(cached) " >&6
 else
 
-	libffi_cv_as_x86_pcrel=yes
+	libffi_cv_as_x86_pcrel=no
 	echo '.text; foo: nop; .data; .long foo-.; .text' > conftest.s
-	if $CC $CFLAGS -c conftest.s 2>&1 | $EGREP -i 'illegal|warning' > /dev/null; then
-	    libffi_cv_as_x86_pcrel=no
+	if $CC $CFLAGS -c conftest.s > /dev/null; then
+	    libffi_cv_as_x86_pcrel=yes
 	fi
 
 fi
@@ -12361,8 +12362,65 @@ $as_echo "#define HAVE_AS_STRING_PSEUDO_OP 1" >>confdefs.h
     fi
 fi
 
+if test x$TARGET = xX86_WIN64; then
+    { $as_echo "$as_me:$LINENO: checking for _ prefix in compiled symbols" >&5
+$as_echo_n "checking for _ prefix in compiled symbols... " >&6; }
+if test "${lt_cv_sys_symbol_underscore+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  lt_cv_sys_symbol_underscore=no
+  cat > conftest.$ac_ext <<_LT_EOF
+void nm_test_func(){}
+int main(){nm_test_func;return 0;}
+_LT_EOF
+  if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>&5
+  ac_status=$?
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; then
+    # Now try to grab the symbols.
+    ac_nlist=conftest.nm
+    if { (eval echo "$as_me:$LINENO: \"$NM conftest.$ac_objext \| $lt_cv_sys_global_symbol_pipe \> $ac_nlist\"") >&5
+  (eval $NM conftest.$ac_objext \| $lt_cv_sys_global_symbol_pipe \> $ac_nlist) 2>&5
+  ac_status=$?
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && test -s "$ac_nlist"; then
+      # See whether the symbols have a leading underscore.
+      if grep '^. _nm_test_func' "$ac_nlist" >/dev/null; then
+        lt_cv_sys_symbol_underscore=yes
+      else
+        if grep '^. nm_test_func ' "$ac_nlist" >/dev/null; then
+	  :
+        else
+	  echo "configure: cannot find nm_test_func in $ac_nlist" >&5
+        fi
+      fi
+    else
+      echo "configure: cannot run $lt_cv_sys_global_symbol_pipe" >&5
+    fi
+  else
+    echo "configure: failed program was:" >&5
+    cat conftest.c >&5
+  fi
+  rm -rf conftest*
+
+fi
+{ $as_echo "$as_me:$LINENO: result: $lt_cv_sys_symbol_underscore" >&5
+$as_echo "$lt_cv_sys_symbol_underscore" >&6; }
+  sys_symbol_underscore=$lt_cv_sys_symbol_underscore
+
+
+    if test "x$sys_symbol_underscore" = xyes; then
+
+cat >>confdefs.h <<\_ACEOF
+#define SYMBOL_UNDERSCORE 1
+_ACEOF
+
+    fi
+fi
+
 case "$target" in
-     *-apple-darwin10* | *-*-freebsd* | *-*-openbsd* | *-pc-solaris*)
+     *-apple-darwin1* | *-*-freebsd* | *-*-openbsd* | *-pc-solaris*)
 
 $as_echo "#define FFI_MMAP_EXEC_WRIT 1" >>confdefs.h
 

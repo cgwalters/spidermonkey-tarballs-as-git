@@ -1,3 +1,4 @@
+// |reftest| pref(javascript.options.xml.content,true)
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
 /*
  * Any copyright is dedicated to the Public Domain.
@@ -12,7 +13,7 @@ if (typeof evalcx == 'function') {
     '} catch (e) {}\n' +
     'try {\n' +
     '    let(x = Object.freeze(this, /x/))\n' +
-    '    e = #0= * .toString\n' +
+    '    e = * .toString\n' +
     '    function y() {}\n' +
     '} catch (e) {}';
 

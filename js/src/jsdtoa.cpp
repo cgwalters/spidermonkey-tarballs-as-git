@@ -1,57 +1,24 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla Communicator client code, released
- * March 31, 1998.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * Portable double to alphanumeric string and back converters.
  */
 #include "jstypes.h"
-#include "jsstdint.h"
 #include "jsdtoa.h"
 #include "jsprf.h"
 #include "jsapi.h"
 #include "jsprvtd.h"
 #include "jsnum.h"
-#include "jsbit.h"
 #include "jslibmath.h"
 #include "jscntxt.h"
 
 #include "jsobjinlines.h"
+
+using namespace js;
 
 #ifdef IS_LITTLE_ENDIAN
 #define IEEE_8087
@@ -60,30 +27,37 @@
 #endif
 
 #ifndef Long
-#define Long int32
+#define Long int32_t
 #endif
 
 #ifndef ULong
-#define ULong uint32
+#define ULong uint32_t
 #endif
 
 /*
 #ifndef Llong
-#define Llong JSInt64
+#define Llong int64_t
 #endif
 
 #ifndef ULlong
-#define ULlong JSUint64
+#define ULlong uint64_t
 #endif
 */
 
+/*
+ * MALLOC gets declared external, and that doesn't work for class members, so
+ * wrap.
+ */
+inline void* dtoa_malloc(size_t size) { return OffTheBooks::malloc_(size); }
+inline void dtoa_free(void* p) { return UnwantedForeground::free_(p); }
+
 #define NO_GLOBAL_STATE
-#define MALLOC js_malloc
-#define FREE js_free
+#define MALLOC dtoa_malloc
+#define FREE dtoa_free
 #include "dtoa.c"
 
 /* Mapping of JSDToStrMode -> js_dtoa mode */
-static const uint8 dtoaModes[] = {
+static const uint8_t dtoaModes[] = {
     0,   /* DTOSTR_STANDARD */
     0,   /* DTOSTR_STANDARD_EXPONENTIAL, */
     3,   /* DTOSTR_FIXED, */
@@ -134,7 +108,7 @@ js_dtostr(DtoaState *state, char *buffer, size_t bufferSize, JSDToStrMode mode, 
         return NULL;
     }
 
-    memcpy(buffer + 2, numBegin, nDigits);
+    js_memcpy(buffer + 2, numBegin, nDigits);
     freedtoa(PASS_STATE numBegin);
     numBegin = buffer + 2; /* +2 leaves space for sign and/or decimal point */
     numEnd = numBegin + nDigits;
@@ -238,11 +212,11 @@ js_dtostr(DtoaState *state, char *buffer, size_t bufferSize, JSDToStrMode mode, 
 /* Let b = floor(b / divisor), and return the remainder.  b must be nonnegative.
  * divisor must be between 1 and 65536.
  * This function cannot run out of memory. */
-static uint32
-divrem(Bigint *b, uint32 divisor)
+static uint32_t
+divrem(Bigint *b, uint32_t divisor)
 {
-    int32 n = b->wds;
-    uint32 remainder = 0;
+    int32_t n = b->wds;
+    uint32_t remainder = 0;
     ULong *bx;
     ULong *bp;
 
@@ -273,13 +247,13 @@ divrem(Bigint *b, uint32 divisor)
 }
 
 /* Return floor(b/2^k) and set b to be the remainder.  The returned quotient must be less than 2^32. */
-static uint32 quorem2(Bigint *b, int32 k)
+static uint32_t quorem2(Bigint *b, int32_t k)
 {
     ULong mask;
     ULong result;
     ULong *bx, *bxe;
-    int32 w;
-    int32 n = k >> 5;
+    int32_t w;
+    int32_t n = k >> 5;
     k &= 0x1F;
     mask = (1<<k) - 1;
 
@@ -320,14 +294,14 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
     char *p;             /* Pointer to current position in the buffer */
     char *pInt;          /* Pointer to the beginning of the integer part of the string */
     char *q;
-    uint32 digit;
+    uint32_t digit;
     U di;                /* d truncated to an integer */
     U df;                /* The fractional part of d */
 
     JS_ASSERT(base >= 2 && base <= 36);
 
     dval(d) = dinput;
-    buffer = (char*) js_malloc(DTOBASESTR_BUFFER_SIZE);
+    buffer = (char*) OffTheBooks::malloc_(DTOBASESTR_BUFFER_SIZE);
     if (!buffer)
         return NULL;
     p = buffer;
@@ -351,13 +325,13 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
     pInt = p;
     dval(di) = floor(dval(d));
     if (dval(di) <= 4294967295.0) {
-        uint32 n = (uint32)dval(di);
+        uint32_t n = (uint32_t)dval(di);
         if (n)
             do {
-                uint32 m = n / base;
+                uint32_t m = n / base;
                 digit = n - m*base;
                 n = m;
-                JS_ASSERT(digit < (uint32)base);
+                JS_ASSERT(digit < (uint32_t)base);
                 *p++ = BASEDIGIT(digit);
             } while (n);
         else *p++ = '0';
@@ -371,12 +345,12 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
         if (!b) {
           nomem1:
             Bfree(PASS_STATE b);
-            js_free(buffer);
+            UnwantedForeground::free_(buffer);
             return NULL;
         }
         do {
             digit = divrem(b, base);
-            JS_ASSERT(digit < (uint32)base);
+            JS_ASSERT(digit < (uint32_t)base);
             *p++ = BASEDIGIT(digit);
         } while (b->wds);
         Bfree(PASS_STATE b);
@@ -393,7 +367,7 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
     if (dval(df) != 0.0) {
         /* We have a fraction. */
         int e, bbits;
-        int32 s2, done;
+        int32_t s2, done;
         Bigint *b, *s, *mlo, *mhi;
 
         b = s = mlo = mhi = NULL;
@@ -407,13 +381,13 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
             if (mlo != mhi)
                 Bfree(PASS_STATE mlo);
             Bfree(PASS_STATE mhi);
-            js_free(buffer);
+            UnwantedForeground::free_(buffer);
             return NULL;
         }
         JS_ASSERT(e < 0);
         /* At this point df = b * 2^e.  e must be less than zero because 0 < df < 1. */
 
-        s2 = -(int32)(word0(d) >> Exp_shift1 & Exp_mask>>Exp_shift1);
+        s2 = -(int32_t)(word0(d) >> Exp_shift1 & Exp_mask>>Exp_shift1);
 #ifndef Sudden_Underflow
         if (!s2)
             s2 = -1;
@@ -454,7 +428,7 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
 
         done = JS_FALSE;
         do {
-            int32 j, j1;
+            int32_t j, j1;
             Bigint *delta;
 
             b = multadd(PASS_STATE b, base, 0);
@@ -513,7 +487,7 @@ js_dtobasestr(DtoaState *state, int base, double dinput)
                 digit++;
                 done = JS_TRUE;
             }
-            JS_ASSERT(digit < (uint32)base);
+            JS_ASSERT(digit < (uint32_t)base);
             *p++ = BASEDIGIT(digit);
         } while (!done);
         Bfree(PASS_STATE b);

@@ -1,89 +1,160 @@
 /* -*- Mode: c++; c-basic-offset: 4; tab-width: 40; indent-tabs-mode: nil -*- */
 /* vim: set ts=40 sw=4 et tw=99: */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla WebGL impl
- *
- * The Initial Developer of the Original Code is
- *   Mozilla Foundation
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *   Vladimir Vukicevic <vladimir@pobox.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jstypedarray_h
 #define jstypedarray_h
 
 #include "jsapi.h"
-#include "jsvalue.h"
+#include "jsclass.h"
+#include "jsobj.h"
+
+#include "gc/Barrier.h"
 
 typedef struct JSProperty JSProperty;
 
 namespace js {
 
 /*
- * ArrayBuffer
+ * ArrayBufferObject
  *
- * This class holds the underlying raw buffer that the TypedArray
- * subclasses access.  It can be created explicitly and passed to a
- * TypedArray subclass, or can be created implicitly by constructing a
- * TypedArray with a size.
+ * This class holds the underlying raw buffer that the various ArrayBufferView
+ * subclasses (DataView and the TypedArrays) access. It can be created
+ * explicitly and passed to an ArrayBufferView subclass, or can be created
+ * implicitly by constructing a TypedArray with a size.
  */
-struct JS_FRIEND_API(ArrayBuffer) {
-    static Class jsclass;
-    static JSPropertySpec jsprops[];
+class ArrayBufferObject : public JSObject
+{
+    static bool byteLengthGetterImpl(JSContext *cx, CallArgs args);
+    static bool fun_slice_impl(JSContext *cx, CallArgs args);
 
-    static JSBool prop_getByteLength(JSContext *cx, JSObject *obj, jsid id, Value *vp);
-    static void class_finalize(JSContext *cx, JSObject *obj);
+  public:
+    static Class protoClass;
+    static JSFunctionSpec jsfuncs[];
 
-    static JSBool class_constructor(JSContext *cx, uintN argc, Value *vp);
+    static JSBool byteLengthGetter(JSContext *cx, unsigned argc, Value *vp);
 
-    static JSObject *create(JSContext *cx, int32 nbytes);
+    static JSBool fun_slice(JSContext *cx, unsigned argc, Value *vp);
 
-    static ArrayBuffer *fromJSObject(JSObject *obj);
+    static JSBool class_constructor(JSContext *cx, unsigned argc, Value *vp);
 
-    ArrayBuffer()
-        : data(0), byteLength()
-    {
-    }
+    static JSObject *create(JSContext *cx, uint32_t nbytes, uint8_t *contents = NULL);
 
-    ~ArrayBuffer();
+    static JSObject *createSlice(JSContext *cx, ArrayBufferObject &arrayBuffer,
+                                 uint32_t begin, uint32_t end);
 
-    bool allocateStorage(JSContext *cx, uint32 bytes);
-    void freeStorage(JSContext *cx);
+    static bool createDataViewForThisImpl(JSContext *cx, CallArgs args);
+    static JSBool createDataViewForThis(JSContext *cx, unsigned argc, Value *vp);
 
-    void *offsetData(uint32 offs) {
-        return (void*) (((intptr_t)data) + offs);
-    }
+    template<typename T>
+    static bool
+    createTypedArrayFromBufferImpl(JSContext *cx, CallArgs args);
 
-    void *data;
-    uint32 byteLength;
+    template<typename T>
+    static JSBool
+    createTypedArrayFromBuffer(JSContext *cx, unsigned argc, Value *vp);
+
+    static void
+    obj_trace(JSTracer *trc, JSObject *obj);
+
+    static JSBool
+    obj_lookupGeneric(JSContext *cx, HandleObject obj, HandleId id,
+                      MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool
+    obj_lookupProperty(JSContext *cx, HandleObject obj, HandlePropertyName name,
+                       MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool
+    obj_lookupElement(JSContext *cx, HandleObject obj, uint32_t index,
+                      MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool
+    obj_lookupSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid,
+                      MutableHandleObject objp, MutableHandleShape propp);
+
+    static JSBool
+    obj_defineGeneric(JSContext *cx, HandleObject obj, HandleId id, HandleValue v,
+                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs);
+    static JSBool
+    obj_defineProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, HandleValue v,
+                       PropertyOp getter, StrictPropertyOp setter, unsigned attrs);
+    static JSBool
+    obj_defineElement(JSContext *cx, HandleObject obj, uint32_t index, HandleValue v,
+                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs);
+    static JSBool
+    obj_defineSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, HandleValue v,
+                      PropertyOp getter, StrictPropertyOp setter, unsigned attrs);
+
+    static JSBool
+    obj_getGeneric(JSContext *cx, HandleObject obj, HandleObject receiver, HandleId id, MutableHandleValue vp);
+
+    static JSBool
+    obj_getProperty(JSContext *cx, HandleObject obj, HandleObject receiver, HandlePropertyName name,
+                    MutableHandleValue vp);
+
+    static JSBool
+    obj_getElement(JSContext *cx, HandleObject obj, HandleObject receiver, uint32_t index, MutableHandleValue vp);
+    static JSBool
+    obj_getElementIfPresent(JSContext *cx, HandleObject obj, HandleObject receiver, uint32_t index,
+                            MutableHandleValue vp, bool *present);
+
+    static JSBool
+    obj_getSpecial(JSContext *cx, HandleObject obj, HandleObject receiver, HandleSpecialId sid, MutableHandleValue vp);
+
+    static JSBool
+    obj_setGeneric(JSContext *cx, HandleObject obj, HandleId id, MutableHandleValue vp, JSBool strict);
+    static JSBool
+    obj_setProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, MutableHandleValue vp, JSBool strict);
+    static JSBool
+    obj_setElement(JSContext *cx, HandleObject obj, uint32_t index, MutableHandleValue vp, JSBool strict);
+    static JSBool
+    obj_setSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, MutableHandleValue vp, JSBool strict);
+
+    static JSBool
+    obj_getGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp);
+    static JSBool
+    obj_getPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp);
+    static JSBool
+    obj_getElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp);
+    static JSBool
+    obj_getSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp);
+
+    static JSBool
+    obj_setGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp);
+    static JSBool
+    obj_setPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp);
+    static JSBool
+    obj_setElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp);
+    static JSBool
+    obj_setSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp);
+
+    static JSBool
+    obj_deleteProperty(JSContext *cx, HandleObject obj, HandlePropertyName name, MutableHandleValue rval, JSBool strict);
+    static JSBool
+    obj_deleteElement(JSContext *cx, HandleObject obj, uint32_t index, MutableHandleValue rval, JSBool strict);
+    static JSBool
+    obj_deleteSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid, MutableHandleValue rval, JSBool strict);
+
+    static JSBool
+    obj_enumerate(JSContext *cx, HandleObject obj, JSIterateOp enum_op,
+                  Value *statep, jsid *idp);
+
+    static JSType
+    obj_typeOf(JSContext *cx, HandleObject obj);
+
+    bool
+    allocateSlots(JSContext *cx, uint32_t size, uint8_t *contents = NULL);
+
+    inline uint32_t byteLength() const;
+
+    inline uint8_t * dataPointer() const;
+
+   /*
+     * Check if the arrayBuffer contains any data. This will return false for
+     * ArrayBuffer.prototype and neutered ArrayBuffers.
+     */
+    inline bool hasData() const;
+
 };
 
 /*
@@ -94,7 +165,7 @@ struct JS_FRIEND_API(ArrayBuffer) {
  * the subclasses.
  */
 
-struct JS_FRIEND_API(TypedArray) {
+struct TypedArray {
     enum {
         TYPE_INT8 = 0,
         TYPE_UINT8,
@@ -114,124 +185,205 @@ struct JS_FRIEND_API(TypedArray) {
         TYPE_MAX
     };
 
+    enum {
+        /* Properties of the typed array stored in reserved slots. */
+        FIELD_LENGTH = 0,
+        FIELD_BYTEOFFSET,
+        FIELD_BYTELENGTH,
+        FIELD_TYPE,
+        FIELD_BUFFER,
+        FIELD_MAX,
+        NUM_FIXED_SLOTS = 7
+    };
+
     // and MUST NOT be used to construct new objects.
-    static Class fastClasses[TYPE_MAX];
+    static Class classes[TYPE_MAX];
 
-    // These are the slow/original classes, used
+    // These are the proto/original classes, used
     // fo constructing new objects
-    static Class slowClasses[TYPE_MAX];
+    static Class protoClasses[TYPE_MAX];
 
-    static JSPropertySpec jsprops[];
+    static JSBool obj_lookupGeneric(JSContext *cx, HandleObject obj, HandleId id,
+                                    MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool obj_lookupProperty(JSContext *cx, HandleObject obj, HandlePropertyName name,
+                                     MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool obj_lookupElement(JSContext *cx, HandleObject obj, uint32_t index,
+                                    MutableHandleObject objp, MutableHandleShape propp);
+    static JSBool obj_lookupSpecial(JSContext *cx, HandleObject obj, HandleSpecialId sid,
+                                    MutableHandleObject objp, MutableHandleShape propp);
 
-    static TypedArray *fromJSObject(JSObject *obj);
+    static JSBool obj_getGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp);
+    static JSBool obj_getPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp);
+    static JSBool obj_getElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp);
+    static JSBool obj_getSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp);
 
-    static JSBool prop_getBuffer(JSContext *cx, JSObject *obj, jsid id, Value *vp);
-    static JSBool prop_getByteOffset(JSContext *cx, JSObject *obj, jsid id, Value *vp);
-    static JSBool prop_getByteLength(JSContext *cx, JSObject *obj, jsid id, Value *vp);
-    static JSBool prop_getLength(JSContext *cx, JSObject *obj, jsid id, Value *vp);
+    static JSBool obj_setGenericAttributes(JSContext *cx, HandleObject obj, HandleId id, unsigned *attrsp);
+    static JSBool obj_setPropertyAttributes(JSContext *cx, HandleObject obj, HandlePropertyName name, unsigned *attrsp);
+    static JSBool obj_setElementAttributes(JSContext *cx, HandleObject obj, uint32_t index, unsigned *attrsp);
+    static JSBool obj_setSpecialAttributes(JSContext *cx, HandleObject obj, HandleSpecialId sid, unsigned *attrsp);
 
-    static JSBool obj_lookupProperty(JSContext *cx, JSObject *obj, jsid id,
-                                     JSObject **objp, JSProperty **propp);
+    static inline Value bufferValue(JSObject *obj);
+    static inline Value byteOffsetValue(JSObject *obj);
+    static inline Value byteLengthValue(JSObject *obj);
+    static inline Value lengthValue(JSObject *obj);
 
-    static void obj_trace(JSTracer *trc, JSObject *obj);
+    static inline ArrayBufferObject * buffer(JSObject *obj);
+    static inline uint32_t byteOffset(JSObject *obj);
+    static inline uint32_t byteLength(JSObject *obj);
+    static inline uint32_t length(JSObject *obj);
 
-    static JSBool obj_getAttributes(JSContext *cx, JSObject *obj, jsid id, uintN *attrsp);
-
-    static JSBool obj_setAttributes(JSContext *cx, JSObject *obj, jsid id, uintN *attrsp);
-
-    static int32 lengthOffset() { return offsetof(TypedArray, length); }
-    static int32 dataOffset() { return offsetof(TypedArray, data); }
-    static int32 typeOffset() { return offsetof(TypedArray, type); }
+    static inline uint32_t type(JSObject *obj);
+    static inline void * viewData(JSObject *obj);
 
   public:
-    TypedArray() : buffer(0) { }
+    static bool
+    isArrayIndex(JSContext *cx, JSObject *obj, jsid id, uint32_t *ip = NULL);
 
-    bool isArrayIndex(JSContext *cx, jsid id, jsuint *ip = NULL);
-    bool valid() { return buffer != 0; }
+    static inline uint32_t slotWidth(int atype);
+    static inline int slotWidth(JSObject *obj);
 
-    ArrayBuffer *buffer;
-    JSObject *bufferJS;
-    uint32 byteOffset;
-    uint32 byteLength;
-    uint32 length;
-    uint32 type;
+    /*
+     * Byte length above which created typed arrays and data views will have
+     * singleton types regardless of the context in which they are created.
+     */
+    static const uint32_t SINGLETON_TYPE_BYTE_LENGTH = 1024 * 1024 * 10;
 
-    void *data;
-
-    inline int slotWidth() const {
-        switch (type) {
-          case js::TypedArray::TYPE_INT8:
-          case js::TypedArray::TYPE_UINT8:
-          case js::TypedArray::TYPE_UINT8_CLAMPED:
-            return 1;
-          case js::TypedArray::TYPE_INT16:
-          case js::TypedArray::TYPE_UINT16:
-            return 2;
-          case js::TypedArray::TYPE_INT32:
-          case js::TypedArray::TYPE_UINT32:
-          case js::TypedArray::TYPE_FLOAT32:
-            return 4;
-          case js::TypedArray::TYPE_FLOAT64:
-            return 8;
-          default:
-            JS_NOT_REACHED("invalid typed array");
-            return 0;
-        }
-    }
+    static int lengthOffset();
+    static int dataOffset();
 };
 
+inline bool
+IsTypedArrayClass(const Class *clasp)
+{
+    return &TypedArray::classes[0] <= clasp &&
+           clasp < &TypedArray::classes[TypedArray::TYPE_MAX];
+}
+
+inline bool
+IsTypedArrayProtoClass(const Class *clasp)
+{
+    return &TypedArray::protoClasses[0] <= clasp &&
+           clasp < &TypedArray::protoClasses[TypedArray::TYPE_MAX];
+}
+
+inline bool
+IsTypedArray(JSObject *obj)
+{
+    return IsTypedArrayClass(obj->getClass());
+}
+
+inline bool
+IsTypedArrayProto(JSObject *obj)
+{
+    return IsTypedArrayProtoClass(obj->getClass());
+}
+
+class DataViewObject : public JSObject
+{
+    static Class protoClass;
+
+    static const size_t BYTEOFFSET_SLOT = 0;
+    static const size_t BYTELENGTH_SLOT = 1;
+    static const size_t BUFFER_SLOT     = 2;
+
+    static inline bool is(const Value &v);
+
+    template<Value ValueGetter(DataViewObject &view)>
+    static bool
+    getterImpl(JSContext *cx, CallArgs args);
+
+    template<Value ValueGetter(DataViewObject &view)>
+    static JSBool
+    getter(JSContext *cx, unsigned argc, Value *vp);
+
+    template<Value ValueGetter(DataViewObject &view)>
+    static bool
+    defineGetter(JSContext *cx, PropertyName *name, HandleObject proto);
+
+  public:
+    static const size_t RESERVED_SLOTS  = 3;
+
+    static inline Value bufferValue(DataViewObject &view);
+    static inline Value byteOffsetValue(DataViewObject &view);
+    static inline Value byteLengthValue(DataViewObject &view);
+
+    static JSBool class_constructor(JSContext *cx, unsigned argc, Value *vp);
+    static JSBool constructWithProto(JSContext *cx, unsigned argc, Value *vp);
+    static JSBool construct(JSContext *cx, JSObject *bufobj, const CallArgs &args, JSObject *proto);
+
+    static inline DataViewObject *
+    create(JSContext *cx, uint32_t byteOffset, uint32_t byteLength,
+           Handle<ArrayBufferObject*> arrayBuffer, JSObject *proto);
+
+    static bool getInt8Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getInt8(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getUint8Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getUint8(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getInt16Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getInt16(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getUint16Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getUint16(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getInt32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getInt32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getUint32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getUint32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getFloat32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getFloat32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool getFloat64Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_getFloat64(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setInt8Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setInt8(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setUint8Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setUint8(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setInt16Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setInt16(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setUint16Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setUint16(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setInt32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setInt32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setUint32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setUint32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setFloat32Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setFloat32(JSContext *cx, unsigned argc, Value *vp);
+
+    static bool setFloat64Impl(JSContext *cx, CallArgs args);
+    static JSBool fun_setFloat64(JSContext *cx, unsigned argc, Value *vp);
+
+    inline uint32_t byteLength();
+    inline uint32_t byteOffset();
+    inline JSObject & arrayBuffer();
+    inline void *dataPointer();
+    inline bool hasBuffer() const;
+    static JSObject *initClass(JSContext *cx);
+    static bool getDataPointer(JSContext *cx, Handle<DataViewObject*> obj,
+                               CallArgs args, size_t typeSize, uint8_t **data);
+    template<typename NativeType>
+    static bool read(JSContext *cx, Handle<DataViewObject*> obj,
+                     CallArgs &args, NativeType *val, const char *method);
+    template<typename NativeType>
+    static bool write(JSContext *cx, Handle<DataViewObject*> obj,
+                      CallArgs &args, const char *method);
+  private:
+    static JSFunctionSpec jsfuncs[];
+};
+
+bool
+IsDataView(JSObject *obj);
+
 } // namespace js
-
-/* Friend API methods */
-
-JS_FRIEND_API(JSObject *)
-js_InitTypedArrayClasses(JSContext *cx, JSObject *obj);
-
-JS_FRIEND_API(JSBool)
-js_IsTypedArray(JSObject *obj);
-
-JS_FRIEND_API(JSBool)
-js_IsArrayBuffer(JSObject *obj);
-
-JS_FRIEND_API(JSObject *)
-js_CreateArrayBuffer(JSContext *cx, jsuint nbytes);
-
-/*
- * Create a new typed array of type atype (one of the TypedArray
- * enumerant values above), with nelements elements.
- */
-JS_FRIEND_API(JSObject *)
-js_CreateTypedArray(JSContext *cx, jsint atype, jsuint nelements);
-
-/*
- * Create a new typed array of type atype (one of the TypedArray
- * enumerant values above), and copy in values from the given JSObject,
- * which must either be a typed array or an array-like object.
- */
-JS_FRIEND_API(JSObject *)
-js_CreateTypedArrayWithArray(JSContext *cx, jsint atype, JSObject *arrayArg);
-
-/*
- * Create a new typed array of type atype (one of the TypedArray
- * enumerant values above), using a given ArrayBuffer for storage.
- * The byteoffset and length values are optional; if -1 is passed, an
- * offset of 0 and enough elements to use up the remainder of the byte
- * array are used as the default values.
- */
-JS_FRIEND_API(JSObject *)
-js_CreateTypedArrayWithBuffer(JSContext *cx, jsint atype, JSObject *bufArg,
-                              jsint byteoffset, jsint length);
-
-/*
- * Reparent a typed array to a new scope. This should only be used to reparent
- * a typed array that does not share its underlying ArrayBuffer with another
- * typed array to avoid having a parent mismatch with the other typed array and
- * its ArrayBuffer.
- */
-JS_FRIEND_API(JSBool)
-js_ReparentTypedArrayToScope(JSContext *cx, JSObject *obj, JSObject *scope);
-
-extern int32 JS_FASTCALL
-js_TypedArray_uint8_clamp_double(const double x);
 
 #endif /* jstypedarray_h */

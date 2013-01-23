@@ -1,42 +1,8 @@
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const HAVE_TM = 'tracemonkey' in this;
-
-const HOTLOOP = HAVE_TM ? tracemonkey.HOTLOOP : 8;
-const RECORDLOOP = HOTLOOP;
-const RUNLOOP = HOTLOOP + 1;
-
-var checkStats;
-if (HAVE_TM) {
-    checkStats = function(stats)
-    {
-        // Temporarily disabled while we work on heuristics.
-        return;
-        function jit(on)
-        {
-          if (on && !options().match(/tracejit/))
-          {
-            options('tracejit');
-          }
-          else if (!on && options().match(/tracejit/))
-          {
-            options('tracejit');
-          }
-        }
-
-        jit(false);
-        for (var name in stats) {
-            var expected = stats[name];
-            var actual = tracemonkey[name];
-            if (expected != actual) {
-                print('Trace stats check failed: got ' + actual + ', expected ' + expected + ' for ' + name);
-            }
-        }
-        jit(true);
-    };
-} else {
-    checkStats = function() {};
-}
 
 var appendToActual = function(s) {
     actual += s + ',';
@@ -46,3 +12,25 @@ if (!("gczeal" in this)) {
   gczeal = function() { }
 }
 
+if (!("schedulegc" in this)) {
+  schedulegc = function() { }
+}
+
+if (!("gcslice" in this)) {
+  gcslice = function() { }
+}
+
+if (!("selectforgc" in this)) {
+  selectforgc = function() { }
+}
+
+if (!("verifyprebarriers" in this)) {
+  verifyprebarriers = function() { }
+}
+
+if (!("verifypostbarriers" in this)) {
+  verifypostbarriers = function() { }
+}
+
+if ("options" in this)
+    options("allow_xml");

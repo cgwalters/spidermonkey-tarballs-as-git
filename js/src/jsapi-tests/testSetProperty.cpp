@@ -1,23 +1,25 @@
 /* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=8 sw=4 et tw=99:
  */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #include "tests.h"
-#include "jsxdrapi.h"
 
 static JSBool
-nativeGet(JSContext *cx, JSObject *obj, jsid id, jsval *vp)
+nativeGet(JSContext *cx, JS::HandleObject obj, JS::HandleId id, JS::MutableHandleValue vp)
 {
-    *vp = INT_TO_JSVAL(17);
+    vp.set(INT_TO_JSVAL(17));
     return JS_TRUE;
 }
 
 BEGIN_TEST(testSetProperty_NativeGetterStubSetter)
 {
-    jsvalRoot vobj(cx);
-    JSObject *obj = JS_NewObject(cx, NULL, NULL, NULL);
+    JS::RootedObject obj(cx, JS_NewObject(cx, NULL, NULL, NULL));
     CHECK(obj);
-    vobj = OBJECT_TO_JSVAL(obj);
+    JS::RootedValue vobj(cx, OBJECT_TO_JSVAL(obj));
 
     CHECK(JS_DefineProperty(cx, global, "globalProp", vobj,
                             JS_PropertyStub, JS_StrictPropertyStub,
@@ -70,7 +72,7 @@ BEGIN_TEST(testSetProperty_InheritedGlobalSetter)
     // This is a JSAPI test because jsapi-test globals do not have a resolve
     // hook and therefore can use the property cache in some cases where the
     // shell can't.
-    JS_ASSERT(JS_GET_CLASS(cx, global)->resolve == &JS_ResolveStub);
+    JS_ASSERT(JS_GetClass(global)->resolve == &JS_ResolveStub);
 
     CHECK(JS_DefineProperty(cx, global, "HOTLOOP", INT_TO_JSVAL(8), NULL, NULL, 0));
     EXEC("var n = 0;\n"

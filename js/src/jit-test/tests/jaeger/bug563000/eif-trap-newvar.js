@@ -3,8 +3,8 @@ setDebug(true);
 
 function nop(){}
 function caller(obj) {
-  assertJit();
+  var x = 'ignominy';
   return x;
 }
-trap(caller, 7, "var x = 'success'; nop()");
+trap(caller, 9 /* getlocal 'x' */, "var x = 'success'; nop()");
 assertEq(caller(this), "success");

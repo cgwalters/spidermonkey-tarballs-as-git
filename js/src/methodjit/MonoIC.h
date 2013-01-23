@@ -1,42 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla SpiderMonkey JavaScript 1.9 code, released
- * May 28, 2008.
- *
- * The Initial Developer of the Original Code is
- *   Brendan Eich <brendan@mozilla.org>
- *
- * Contributor(s):
- *   David Anderson <danderson@mozilla.com>
- *   David Mandelin <dmandelin@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if !defined jsjaeger_mono_ic_h__ && defined JS_METHODJIT && defined JS_MONOIC
 #define jsjaeger_mono_ic_h__
@@ -53,10 +20,10 @@ namespace mjit {
 
 class FrameSize
 {
-    uint32 frameDepth_ : 16;
-    uint32 argc_;
+    uint32_t frameDepth_ : 16;
+    uint32_t argc_;
   public:
-    void initStatic(uint32 frameDepth, uint32 argc) {
+    void initStatic(uint32_t frameDepth, uint32_t argc) {
         JS_ASSERT(frameDepth > 0);
         frameDepth_ = frameDepth;
         argc_ = argc;
@@ -75,18 +42,36 @@ class FrameSize
         return frameDepth_ == 0;
     }
 
-    uint32 staticLocalSlots() const {
+    uint32_t staticLocalSlots() const {
         JS_ASSERT(isStatic());
         return frameDepth_;
     }
 
-    uint32 staticArgc() const {
+    uint32_t staticArgc() const {
         JS_ASSERT(isStatic());
         return argc_;
     }
 
-    uint32 getArgc(VMFrame &f) const {
+    uint32_t getArgc(VMFrame &f) const {
         return isStatic() ? staticArgc() : f.u.call.dynamicArgc;
+    }
+
+    bool lowered(jsbytecode *pc) const {
+        return isDynamic() || staticArgc() != GET_ARGC(pc);
+    }
+
+    RejoinState rejoinState(jsbytecode *pc, bool native) {
+        if (isStatic()) {
+            if (staticArgc() == GET_ARGC(pc))
+                return native ? REJOIN_NATIVE : REJOIN_CALL_PROLOGUE;
+            JS_ASSERT(staticArgc() == GET_ARGC(pc) - 1);
+            return native ? REJOIN_NATIVE_LOWERED : REJOIN_CALL_PROLOGUE_LOWERED_CALL;
+        }
+        return native ? REJOIN_NATIVE_LOWERED : REJOIN_CALL_PROLOGUE_LOWERED_APPLY;
+    }
+
+    bool lowered(jsbytecode *pc) {
+        return !isStatic() || staticArgc() != GET_ARGC(pc);
     }
 };
 
@@ -108,9 +93,8 @@ struct GlobalNameIC
      *   of this, x86 is the only platform which requires non-trivial patching
      *   code.
      */
-    int32 loadStoreOffset   : 15;
-    int32 shapeOffset       : 15;
-    bool usePropertyCache   : 1;
+    int32_t loadStoreOffset   : 15;
+    int32_t shapeOffset       : 15;
 };
 
 struct GetGlobalNameIC : public GlobalNameIC
@@ -121,49 +105,19 @@ struct SetGlobalNameIC : public GlobalNameIC
 {
     JSC::CodeLocationLabel  slowPathStart;
 
-    /* Dynamically generted stub for method-write checks. */
-    JSC::JITCode            extraStub;
-
     /* SET only, if we had to generate an out-of-line path. */
-    int inlineShapeJump : 10;   /* Offset into inline path for shape jump. */
-    int extraShapeGuard : 6;    /* Offset into stub for shape guard. */
+    int32_t inlineShapeJump : 10;   /* Offset into inline path for shape jump. */
     bool objConst : 1;          /* True if the object is constant. */
     RegisterID objReg   : 5;    /* Register for object, if objConst is false. */
     RegisterID shapeReg : 5;    /* Register for shape; volatile. */
-    bool hasExtraStub : 1;      /* Extra stub is preset. */
 
-    int fastRejoinOffset : 16;  /* Offset from fastPathStart to rejoin. */
-    int extraStoreOffset : 16;  /* Offset into store code. */
+    int32_t fastRejoinOffset : 16;  /* Offset from fastPathStart to rejoin. */
 
     /* SET only. */
     ValueRemat vr;              /* RHS value. */
 
-    void patchInlineShapeGuard(Repatcher &repatcher, int32 shape);
-    void patchExtraShapeGuard(Repatcher &repatcher, int32 shape);
+    void patchInlineShapeGuard(Repatcher &repatcher, Shape *shape);
 };
-
-struct TraceICInfo {
-    TraceICInfo() {}
-
-    JSC::CodeLocationLabel stubEntry;
-    JSC::CodeLocationLabel jumpTarget;
-    JSC::CodeLocationJump traceHint;
-    JSC::CodeLocationJump slowTraceHint;
-#ifdef DEBUG
-    jsbytecode *jumpTargetPC;
-#endif
-    
-    /* This data is used by the tracing JIT. */
-    void *traceData;
-    uintN traceEpoch;
-    uint32 loopCounter;
-    uint32 loopCounterStart;
-
-    bool initialized : 1;
-    bool hasSlowTraceHint : 1;
-};
-
-static const uint16 BAD_TRACEIC_INDEX = (uint16)0xffff;
 
 void JS_FASTCALL GetGlobalName(VMFrame &f, ic::GetGlobalNameIC *ic);
 void JS_FASTCALL SetGlobalName(VMFrame &f, ic::SetGlobalNameIC *ic);
@@ -191,10 +145,12 @@ JSBool JS_FASTCALL Equality(VMFrame &f, ic::EqualityICInfo *ic);
 struct CallICInfo {
     typedef JSC::MacroAssembler::RegisterID RegisterID;
 
+    /* Linked list entry for all ICs guarding on the same JIT entry point in fastGuardedObject. */
+    JSCList links;
+
     enum PoolIndex {
         Pool_ScriptStub,
         Pool_ClosureStub,
-        Pool_NativeStub,
         Total_Pools
     };
 
@@ -204,8 +160,8 @@ struct CallICInfo {
     JSObject *fastGuardedObject;
     JSObject *fastGuardedNative;
 
-    /* PC at the call site. */
-    jsbytecode *pc;
+    /* Return site for scripted calls at this site, with PC and inlining state. */
+    CallSite *call;
 
     FrameSize frameSize;
 
@@ -219,42 +175,28 @@ struct CallICInfo {
     JSC::CodeLocationJump funJump;
 
     /* Offset to inline scripted call, from funGuard. */
-    uint32 hotJumpOffset   : 16;
-    uint32 joinPointOffset : 16;
+    uint32_t hotJumpOffset   : 16;
+    uint32_t joinPointOffset : 16;
 
     /* Out of line slow call. */
-    uint32 oolCallOffset   : 16;
+    uint32_t oolCallOffset   : 16;
 
-    /* Jump to patch for out-of-line scripted calls. */
-    uint32 oolJumpOffset   : 16;
+    /* Jump/rejoin to patch for out-of-line scripted calls. */
+    uint32_t oolJumpOffset   : 16;
 
     /* Label for out-of-line call to IC function. */
-    uint32 icCallOffset    : 16;
+    uint32_t icCallOffset    : 16;
 
     /* Offset for deep-fun check to rejoin at. */
-    uint32 hotPathOffset   : 16;
+    uint32_t hotPathOffset   : 16;
 
     /* Join point for all slow call paths. */
-    uint32 slowJoinOffset  : 16;
+    uint32_t slowJoinOffset  : 16;
 
     RegisterID funObjReg : 5;
-    RegisterID funPtrReg : 5;
     bool hit : 1;
     bool hasJsFunCheck : 1;
-
-    inline void reset() {
-        fastGuardedObject = NULL;
-        fastGuardedNative = NULL;
-        hit = false;
-        hasJsFunCheck = false;
-        pools[0] = pools[1] = pools[2] = NULL;
-    }
-
-    inline void releasePools() {
-        releasePool(Pool_ScriptStub);
-        releasePool(Pool_ClosureStub);
-        releasePool(Pool_NativeStub);
-    }
+    bool typeMonitored : 1;
 
     inline void releasePool(PoolIndex index) {
         if (pools[index]) {
@@ -262,16 +204,42 @@ struct CallICInfo {
             pools[index] = NULL;
         }
     }
+
+    inline void purgeGuardedObject() {
+        JS_ASSERT(fastGuardedObject);
+        releasePool(CallICInfo::Pool_ClosureStub);
+        hasJsFunCheck = false;
+        fastGuardedObject = NULL;
+        JS_REMOVE_LINK(&links);
+    }
+
+    inline void reset(Repatcher &repatcher) {
+        if (fastGuardedObject) {
+            repatcher.repatch(funGuard, NULL);
+            repatcher.relink(funJump, slowPathStart);
+            purgeGuardedObject();
+        }
+        if (fastGuardedNative) {
+            repatcher.relink(funJump, slowPathStart);
+            fastGuardedNative = NULL;
+        }
+        if (pools[Pool_ScriptStub]) {
+            JSC::CodeLocationJump oolJump = slowPathStart.jumpAtOffset(oolJumpOffset);
+            JSC::CodeLocationLabel icCall = slowPathStart.labelAtOffset(icCallOffset);
+            repatcher.relink(oolJump, icCall);
+            releasePool(Pool_ScriptStub);
+        }
+        hit = false;
+    }
 };
 
 void * JS_FASTCALL New(VMFrame &f, ic::CallICInfo *ic);
 void * JS_FASTCALL Call(VMFrame &f, ic::CallICInfo *ic);
-void JS_FASTCALL NativeNew(VMFrame &f, ic::CallICInfo *ic);
-void JS_FASTCALL NativeCall(VMFrame &f, ic::CallICInfo *ic);
+void * JS_FASTCALL NativeNew(VMFrame &f, ic::CallICInfo *ic);
+void * JS_FASTCALL NativeCall(VMFrame &f, ic::CallICInfo *ic);
 JSBool JS_FASTCALL SplatApplyArgs(VMFrame &f);
 
-void PurgeMICs(JSContext *cx, JSScript *script);
-void SweepCallICs(JSContext *cx, JSScript *script, bool purgeAll);
+void GenerateArgumentCheckStub(VMFrame &f);
 
 } /* namespace ic */
 } /* namespace mjit */

@@ -1,41 +1,9 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla SpiderMonkey JavaScript 1.9 code, released
- * May 28, 2008.
- *
- * The Initial Developer of the Original Code is
- *   Brendan Eich <brendan@mozilla.org>
- *
- * Contributor(s):
- *   David Anderson <danderson@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if !defined jsjaeger_imm_sync_h__ && defined JS_METHODJIT && defined JS_NUNBOX32
 #define jsjaeger_imm_sync_h__
@@ -70,7 +38,7 @@ class ImmutableSync
          *
          * They are separated for readability.
          */
-        uint32 generation;
+        uint32_t generation;
         bool dataClobbered;
         bool typeClobbered;
         bool hasDataReg;
@@ -80,7 +48,7 @@ class ImmutableSync
         RegisterID typeReg;
         JSValueType type;
 
-        void reset(uint32 gen) {
+        void reset(uint32_t gen) {
             dataClobbered = false;
             typeClobbered = false;
             hasDataReg = false;
@@ -91,9 +59,9 @@ class ImmutableSync
     };
 
   public:
-    ImmutableSync(JSContext *cx, const FrameState &frame);
+    ImmutableSync();
     ~ImmutableSync();
-    bool init(uint32 nentries);
+    bool init(JSContext *cx, const FrameState &frame, uint32_t nentries);
 
     void reset(Assembler *masm, Registers avail, FrameEntry *top, FrameEntry *bottom);
     void sync(FrameEntry *fe);
@@ -103,7 +71,12 @@ class ImmutableSync
     void syncNormal(FrameEntry *fe);
     RegisterID ensureDataReg(FrameEntry *fe, SyncEntry &e);
     RegisterID ensureTypeReg(FrameEntry *fe, SyncEntry &e);
+
     RegisterID allocReg();
+    void freeReg(RegisterID reg);
+
+    /* To be called only by allocReg. */
+    RegisterID doAllocReg();
 
     inline SyncEntry &entryFor(FrameEntry *fe);
 
@@ -113,14 +86,14 @@ class ImmutableSync
   private:
     JSContext *cx;
     SyncEntry *entries;
-    const FrameState &frame;
-    uint32 nentries;
+    const FrameState *frame;
+    uint32_t nentries;
     Registers avail;
     Assembler *masm;
     SyncEntry *regs[Assembler::TotalRegisters];
     FrameEntry *top;
     FrameEntry *bottom;
-    uint32 generation;
+    uint32_t generation;
 };
 
 } /* namespace mjit */

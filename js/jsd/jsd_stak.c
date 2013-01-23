@@ -1,39 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * JavaScript Debugging support - Call stack support
@@ -60,27 +28,24 @@ static JSDStackFrameInfo*
 _addNewFrame(JSDContext*        jsdc,
              JSDThreadState*    jsdthreadstate,
              JSScript*          script,
-             jsuword            pc,
+             uintptr_t          pc,
              JSStackFrame*      fp)
 {
     JSDStackFrameInfo* jsdframe;
     JSDScript*         jsdscript = NULL;
 
-    if (JS_IsScriptFrame(jsdthreadstate->context, fp))
+    JSD_LOCK_SCRIPTS(jsdc);
+    jsdscript = jsd_FindJSDScript(jsdc, script);
+    JSD_UNLOCK_SCRIPTS(jsdc);
+    if (!jsdscript || (jsdc->flags & JSD_HIDE_DISABLED_FRAMES &&
+                       !JSD_IS_DEBUG_ENABLED(jsdc, jsdscript)))
     {
-        JSD_LOCK_SCRIPTS(jsdc);
-        jsdscript = jsd_FindJSDScript(jsdc, script);
-        JSD_UNLOCK_SCRIPTS(jsdc);
-        if (!jsdscript || (jsdc->flags & JSD_HIDE_DISABLED_FRAMES &&
-                           !JSD_IS_DEBUG_ENABLED(jsdc, jsdscript)))
-        {
-            return NULL;
-        }
-
-        if (!JSD_IS_DEBUG_ENABLED(jsdc, jsdscript))
-            jsdthreadstate->flags |= TS_HAS_DISABLED_FRAME;
+        return NULL;
     }
-    
+
+    if (!JSD_IS_DEBUG_ENABLED(jsdc, jsdscript))
+        jsdthreadstate->flags |= TS_HAS_DISABLED_FRAME;
+
     jsdframe = (JSDStackFrameInfo*) calloc(1, sizeof(JSDStackFrameInfo));
     if( ! jsdframe )
         return NULL;
@@ -125,7 +90,7 @@ jsd_NewThreadState(JSDContext* jsdc, JSContext *cx )
     while( NULL != (fp = JS_FrameIterator(cx, &iter)) )
     {
         JSScript* script = JS_GetFrameScript(cx, fp);
-        jsuword  pc = (jsuword) JS_GetFramePC(cx, fp);
+        uintptr_t  pc = (uintptr_t) JS_GetFramePC(cx, fp);
         jsval dummyThis;
 
         /*
@@ -133,9 +98,7 @@ jsd_NewThreadState(JSDContext* jsdc, JSContext *cx )
          * |this| object, or native frames, if JSD_INCLUDE_NATIVE_FRAMES
          * isn't set.
          */
-        if (JS_GetFrameThis(cx, fp, &dummyThis) &&
-            ((jsdc->flags & JSD_INCLUDE_NATIVE_FRAMES) ||
-             JS_IsScriptFrame(cx, fp)))
+        if (JS_GetFrameThis(cx, fp, &dummyThis))
         {
             JSDStackFrameInfo *frame;
 
@@ -193,10 +156,10 @@ jsd_DestroyThreadState(JSDContext* jsdc, JSDThreadState* jsdthreadstate)
     free(jsdthreadstate);
 }
 
-uintN
+unsigned
 jsd_GetCountOfStackFrames(JSDContext* jsdc, JSDThreadState* jsdthreadstate)
 {
-    uintN count = 0;
+    unsigned count = 0;
 
     JSD_LOCK_THREADSTATES(jsdc);
 
@@ -270,12 +233,12 @@ jsd_GetScriptForStackFrame(JSDContext* jsdc,
     return jsdscript;
 }
 
-jsuword
+uintptr_t
 jsd_GetPCForStackFrame(JSDContext* jsdc, 
                        JSDThreadState* jsdthreadstate,
                        JSDStackFrameInfo* jsdframe)
 {
-    jsuword pc = 0;
+    uintptr_t pc = 0;
 
     JSD_LOCK_THREADSTATES(jsdc);
 
@@ -425,8 +388,8 @@ JSBool
 jsd_EvaluateUCScriptInStackFrame(JSDContext* jsdc, 
                                  JSDThreadState* jsdthreadstate,
                                  JSDStackFrameInfo* jsdframe,
-                                 const jschar *bytes, uintN length,
-                                 const char *filename, uintN lineno,
+                                 const jschar *bytes, unsigned length,
+                                 const char *filename, unsigned lineno,
                                  JSBool eatExceptions, jsval *rval)
 {
     JSBool retval;
@@ -463,8 +426,8 @@ JSBool
 jsd_EvaluateScriptInStackFrame(JSDContext* jsdc, 
                                JSDThreadState* jsdthreadstate,
                                JSDStackFrameInfo* jsdframe,
-                               const char *bytes, uintN length,
-                               const char *filename, uintN lineno,
+                               const char *bytes, unsigned length,
+                               const char *filename, unsigned lineno,
                                JSBool eatExceptions, jsval *rval)
 {
     JSBool retval;

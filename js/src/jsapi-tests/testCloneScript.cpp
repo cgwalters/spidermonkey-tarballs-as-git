@@ -3,18 +3,23 @@
  *
  * Test script cloning.
  */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 #include "tests.h"
-#include "jsapi.h"
+#include "jsdbgapi.h"
 
 BEGIN_TEST(test_cloneScript)
 {
-    JSObject *A, *B;
+    JS::RootedObject A(cx, createGlobal());
+    JS::RootedObject B(cx, createGlobal());
 
-    CHECK(A = createGlobal());
-    CHECK(B = createGlobal());
+    CHECK(A);
+    CHECK(B);
 
-    const char *source = 
+    const char *source =
         "var i = 0;\n"
         "var sum = 0;\n"
         "while (i < 10) {\n"
@@ -23,14 +28,11 @@ BEGIN_TEST(test_cloneScript)
         "}\n"
         "(sum);\n";
 
-    JSObject *obj;
+    JS::RootedObject obj(cx);
 
     // compile for A
     {
-        JSAutoEnterCompartment a;
-        if (!a.enter(cx, A))
-            return false;
-
+        JSAutoCompartment a(cx, A);
         JSFunction *fun;
         CHECK(fun = JS_CompileFunction(cx, A, "f", 0, NULL, source, strlen(source), __FILE__, 1));
         CHECK(obj = JS_GetFunctionObject(fun));
@@ -38,13 +40,108 @@ BEGIN_TEST(test_cloneScript)
 
     // clone into B
     {
-        JSAutoEnterCompartment b;
-        if (!b.enter(cx, B))
-            return false;
-
+        JSAutoCompartment b(cx, B);
         CHECK(JS_CloneFunctionObject(cx, obj, B));
     }
 
     return true;
 }
 END_TEST(test_cloneScript)
+
+void
+DestroyPrincipals(JSPrincipals *principals)
+{
+    delete principals;
+}
+
+struct Principals : public JSPrincipals
+{
+  public:
+    Principals()
+    {
+        refcount = 0;
+    }
+};
+
+class AutoDropPrincipals
+{
+    JSRuntime *rt;
+    JSPrincipals *principals;
+
+  public:
+    AutoDropPrincipals(JSRuntime *rt, JSPrincipals *principals)
+      : rt(rt), principals(principals)
+    {
+        JS_HoldPrincipals(principals);
+    }
+
+    ~AutoDropPrincipals()
+    {
+        JS_DropPrincipals(rt, principals);
+    }
+};
+
+BEGIN_TEST(test_cloneScriptWithPrincipals)
+{
+    JS_InitDestroyPrincipalsCallback(rt, DestroyPrincipals);
+
+    JSPrincipals *principalsA = new Principals();
+    AutoDropPrincipals dropA(rt, principalsA);
+    JSPrincipals *principalsB = new Principals();
+    AutoDropPrincipals dropB(rt, principalsB);
+
+    JS::RootedObject A(cx, createGlobal(principalsA));
+    JS::RootedObject B(cx, createGlobal(principalsB));
+
+    CHECK(A);
+    CHECK(B);
+
+    const char *argnames[] = { "arg" };
+    const char *source = "return function() { return arg; }";
+
+    JS::RootedObject obj(cx);
+
+    // Compile in A
+    {
+        JSAutoCompartment a(cx, A);
+        JSFunction *fun;
+        CHECK(fun = JS_CompileFunctionForPrincipals(cx, A, principalsA, "f",
+                                                    mozilla::ArrayLength(argnames), argnames,
+                                                    source, strlen(source), __FILE__, 1));
+
+        JSScript *script;
+        CHECK(script = JS_GetFunctionScript(cx, fun));
+
+        CHECK(JS_GetScriptPrincipals(script) == principalsA);
+        CHECK(obj = JS_GetFunctionObject(fun));
+    }
+
+    // Clone into B
+    {
+        JSAutoCompartment b(cx, B);
+        JS::RootedObject cloned(cx);
+        CHECK(cloned = JS_CloneFunctionObject(cx, obj, B));
+
+        JSFunction *fun;
+        CHECK(fun = JS_ValueToFunction(cx, JS::ObjectValue(*cloned)));
+
+        JSScript *script;
+        CHECK(script = JS_GetFunctionScript(cx, fun));
+
+        CHECK(JS_GetScriptPrincipals(script) == principalsB);
+
+        JS::Value v;
+        JS::Value args[] = { JS::Int32Value(1) };
+        CHECK(JS_CallFunctionValue(cx, B, JS::ObjectValue(*cloned), 1, args, &v));
+        CHECK(v.isObject());
+
+        JSObject *funobj = &v.toObject();
+        CHECK(JS_ObjectIsFunction(cx, funobj));
+        CHECK(fun = JS_ValueToFunction(cx, v));
+        CHECK(script = JS_GetFunctionScript(cx, fun));
+        CHECK(JS_GetScriptPrincipals(script) == principalsB);
+    }
+
+    return true;
+}
+END_TEST(test_cloneScriptWithPrincipals)

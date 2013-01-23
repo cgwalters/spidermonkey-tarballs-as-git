@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 
 // A short test program with which to experiment with the assembler.
 
@@ -110,7 +114,7 @@ void test1 ( void )
 
   // constructor for LinkBuffer asks ep to allocate r-x memory,
   // then copies it there.
-  JSC::LinkBuffer patchBuffer(am, ep);
+  JSC::LinkBuffer patchBuffer(am, ep, JSC::METHOD_CODE);
 
   // finalize
   JSC::MacroAssemblerCodeRef cr = patchBuffer.finalizeCode();
@@ -266,7 +270,7 @@ void test2 ( void )
 
   // constructor for LinkBuffer asks ep to allocate r-x memory,
   // then copies it there.
-  JSC::LinkBuffer patchBuffer(am, ep);
+  JSC::LinkBuffer patchBuffer(am, ep, JSC::METHOD_CODE);
 
   // finalize
   JSC::MacroAssemblerCodeRef cr = patchBuffer.finalizeCode();
@@ -453,7 +457,7 @@ void test3 ( void )
 
   // constructor for LinkBuffer asks ep to allocate r-x memory,
   // then copies it there.
-  JSC::LinkBuffer patchBuffer(am, ep);
+  JSC::LinkBuffer patchBuffer(am, ep, JSC::METHOD_CODE);
 
   // finalize
   JSC::MacroAssemblerCodeRef cr = patchBuffer.finalizeCode();
@@ -663,7 +667,7 @@ void test4 ( void )
 
   // constructor for LinkBuffer asks ep to allocate r-x memory,
   // then copies it there.
-  JSC::LinkBuffer patchBuffer(am, ep);
+  JSC::LinkBuffer patchBuffer(am, ep, JSC::METHOD_CODE);
 
   // now fix up any branches/calls
   //JSC::FunctionPtr target = JSC::FunctionPtr::FunctionPtr( &cube );
@@ -869,7 +873,7 @@ void test5 ( void )
 
   // constructor for LinkBuffer asks ep to allocate r-x memory,
   // then copies it there.
-  JSC::LinkBuffer patchBuffer(am, ep);
+  JSC::LinkBuffer patchBuffer(am, ep, JSC::METHOD_CODE);
 
   // now fix up any branches/calls
   JSC::FunctionPtr target = JSC::FunctionPtr::FunctionPtr( &cube );

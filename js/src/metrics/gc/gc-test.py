@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # Works with python2.6
 
 import datetime, os, re, sys, traceback
@@ -40,6 +44,7 @@ def stddev(seq, mean):
 
 def run_test(test):
     env = os.environ.copy()
+    env['MOZ_GCTIMER'] = 'stderr'
     cmd = get_test_cmd(test.path)
     total = []
     mark = []

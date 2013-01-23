@@ -4,8 +4,8 @@ var x = "notset";
 function main() { x = "failure"; }
 function success() { x = "success"; }
 
-/* The JSOP_STOP in a. */
-trap(main, 10, "success()");
+/* The JSOP_STOP in main. */
+trap(main, 16, "success()");
 main();
 
 assertEq(x, "success");

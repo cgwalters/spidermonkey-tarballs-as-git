@@ -1,39 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is mozilla.org code.
- *
- * The Initial Developer of the Original Code is
- * Netscape Communications Corporation.
- * Portions created by the Initial Developer are Copyright (C) 1998
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /*
  * JavaScript Debugging support - Stepping support
@@ -98,7 +66,7 @@ _interpreterTrace(JSDContext* jsdc, JSContext *cx, JSStackFrame *fp,
         printf("%s this: ", JS_IsConstructorFrame(cx, fp) ? "constructing":"");
 
         if (JS_GetFrameThis(cx, fp, &thisVal))
-            printf("0x%0llx", (JSUword) thisVal);
+            printf("0x%0llx", (uintptr_t) thisVal);
         else
             puts("<unavailable>");
     }
@@ -109,7 +77,7 @@ _interpreterTrace(JSDContext* jsdc, JSContext *cx, JSStackFrame *fp,
 
 JSBool
 _callHook(JSDContext *jsdc, JSContext *cx, JSStackFrame *fp, JSBool before,
-          uintN type, JSD_CallHookProc hook, void *hookData)
+          unsigned type, JSD_CallHookProc hook, void *hookData)
 {
     JSDScript*        jsdscript;
     JSScript*         jsscript;
@@ -150,9 +118,9 @@ _callHook(JSDContext *jsdc, JSContext *cx, JSStackFrame *fp, JSBool before,
                 {
                     if (before)
                     {
-                        if (JSLL_IS_ZERO(pdata->lastCallStart))
+                        if (!pdata->lastCallStart)
                         {
-                            int64 now;
+                            int64_t now;
                             JSDProfileData *callerpdata;
                             
                             /* Get the time just the once, for consistency. */
@@ -162,17 +130,14 @@ _callHook(JSDContext *jsdc, JSContext *cx, JSStackFrame *fp, JSBool before,
                             callerpdata = jsdc->callingFunctionPData;
                             if (callerpdata)
                             {
-                                int64 ll_delta;
+                                int64_t ll_delta;
                                 pdata->caller = callerpdata;
                                 /* We need to 'stop' the timer for the caller.
                                  * Use time since last return if appropriate. */
-                                if (JSLL_IS_ZERO(jsdc->lastReturnTime))
-                                {
-                                    JSLL_SUB(ll_delta, now, callerpdata->lastCallStart);
-                                } else {
-                                    JSLL_SUB(ll_delta, now, jsdc->lastReturnTime);
-                                }
-                                JSLL_ADD(callerpdata->runningTime, callerpdata->runningTime, ll_delta);
+                                ll_delta = jsdc->lastReturnTime
+                                           ? now - jsdc->lastReturnTime
+                                           : now - callerpdata->lastCallStart;
+                                callerpdata->runningTime += ll_delta;
                             }
                             /* We're the new current function, and no return
                              * has happened yet. */
@@ -188,13 +153,12 @@ _callHook(JSDContext *jsdc, JSContext *cx, JSStackFrame *fp, JSBool before,
                         }
                         /* make sure we're called for the return too. */
                         hookresult = JS_TRUE;
-                    } else if (!pdata->recurseDepth &&
-                               !JSLL_IS_ZERO(pdata->lastCallStart)) {
-                        int64 now, ll_delta;
-                        jsdouble delta;
+                    } else if (!pdata->recurseDepth && pdata->lastCallStart) {
+                        int64_t now, ll_delta;
+                        double delta;
                         now = JS_Now();
-                        JSLL_SUB(ll_delta, now, pdata->lastCallStart);
-                        JSLL_L2D(delta, ll_delta);
+                        ll_delta = now - pdata->lastCallStart;
+                        delta = ll_delta;
                         delta /= 1000.0;
                         pdata->totalExecutionTime += delta;
                         /* minExecutionTime starts as 0, so we need to overwrite
@@ -212,13 +176,13 @@ _callHook(JSDContext *jsdc, JSContext *cx, JSStackFrame *fp, JSBool before,
                          * the running total by the time delta since the last
                          * return, and use the running total instead of the
                          * delta calculated above. */
-                        if (!JSLL_IS_ZERO(jsdc->lastReturnTime))
+                        if (jsdc->lastReturnTime)
                         {
                             /* Add last chunk to running time, and use total
                              * running time as 'delta'. */
-                            JSLL_SUB(ll_delta, now, jsdc->lastReturnTime);
-                            JSLL_ADD(pdata->runningTime, pdata->runningTime, ll_delta);
-                            JSLL_L2D(delta, pdata->runningTime);
+                            ll_delta = now - jsdc->lastReturnTime;
+                            pdata->runningTime += ll_delta;
+                            delta = pdata->runningTime;
                             delta /= 1000.0;
                         }
                         

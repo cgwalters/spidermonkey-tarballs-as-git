@@ -1,41 +1,8 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jsgcinlines_h___
 #define jsgcinlines_h___
@@ -43,52 +10,123 @@
 #include "jsgc.h"
 #include "jscntxt.h"
 #include "jscompartment.h"
-
 #include "jslock.h"
-#include "jstl.h"
+#include "jsscope.h"
+#include "jsxml.h"
 
-#ifdef JS_GCMETER
-# define METER(x)               ((void) (x))
-# define METER_IF(condition, x) ((void) ((condition) && (x)))
-#else
-# define METER(x)               ((void) 0)
-# define METER_IF(condition, x) ((void) 0)
-#endif
+#include "js/TemplateLib.h"
 
 namespace js {
+
+struct Shape;
+
 namespace gc {
+
+inline JSGCTraceKind
+GetGCThingTraceKind(const void *thing)
+{
+    JS_ASSERT(thing);
+    const Cell *cell = reinterpret_cast<const Cell *>(thing);
+    return MapAllocToTraceKind(cell->getAllocKind());
+}
 
 /* Capacity for slotsToThingKind */
 const size_t SLOTS_TO_THING_KIND_LIMIT = 17;
 
 /* Get the best kind to use when making an object with the given slot count. */
-static inline FinalizeKind
+static inline AllocKind
 GetGCObjectKind(size_t numSlots)
 {
-    extern FinalizeKind slotsToThingKind[];
+    extern AllocKind slotsToThingKind[];
 
     if (numSlots >= SLOTS_TO_THING_KIND_LIMIT)
-        return FINALIZE_OBJECT0;
+        return FINALIZE_OBJECT16;
     return slotsToThingKind[numSlots];
+}
+
+static inline AllocKind
+GetGCObjectKind(Class *clasp)
+{
+    if (clasp == &FunctionClass)
+        return JSFunction::FinalizeKind;
+    uint32_t nslots = JSCLASS_RESERVED_SLOTS(clasp);
+    if (clasp->flags & JSCLASS_HAS_PRIVATE)
+        nslots++;
+    return GetGCObjectKind(nslots);
+}
+
+/* As for GetGCObjectKind, but for dense array allocation. */
+static inline AllocKind
+GetGCArrayKind(size_t numSlots)
+{
+    extern AllocKind slotsToThingKind[];
+
+    /*
+     * Dense arrays can use their fixed slots to hold their elements array
+     * (less two Values worth of ObjectElements header), but if more than the
+     * maximum number of fixed slots is needed then the fixed slots will be
+     * unused.
+     */
+    JS_STATIC_ASSERT(ObjectElements::VALUES_PER_HEADER == 2);
+    if (numSlots > JSObject::NELEMENTS_LIMIT || numSlots + 2 >= SLOTS_TO_THING_KIND_LIMIT)
+        return FINALIZE_OBJECT2;
+    return slotsToThingKind[numSlots + 2];
+}
+
+static inline AllocKind
+GetGCObjectFixedSlotsKind(size_t numFixedSlots)
+{
+    extern AllocKind slotsToThingKind[];
+
+    JS_ASSERT(numFixedSlots < SLOTS_TO_THING_KIND_LIMIT);
+    return slotsToThingKind[numFixedSlots];
+}
+
+static inline AllocKind
+GetBackgroundAllocKind(AllocKind kind)
+{
+    JS_ASSERT(!IsBackgroundFinalized(kind));
+    JS_ASSERT(kind <= FINALIZE_OBJECT_LAST);
+    return (AllocKind) (kind + 1);
+}
+
+/*
+ * Try to get the next larger size for an object, keeping BACKGROUND
+ * consistent.
+ */
+static inline bool
+TryIncrementAllocKind(AllocKind *kindp)
+{
+    size_t next = size_t(*kindp) + 2;
+    if (next >= size_t(FINALIZE_OBJECT_LIMIT))
+        return false;
+    *kindp = AllocKind(next);
+    return true;
 }
 
 /* Get the number of fixed slots and initial capacity associated with a kind. */
 static inline size_t
-GetGCKindSlots(FinalizeKind thingKind)
+GetGCKindSlots(AllocKind thingKind)
 {
     /* Using a switch in hopes that thingKind will usually be a compile-time constant. */
     switch (thingKind) {
       case FINALIZE_OBJECT0:
+      case FINALIZE_OBJECT0_BACKGROUND:
         return 0;
       case FINALIZE_OBJECT2:
+      case FINALIZE_OBJECT2_BACKGROUND:
         return 2;
       case FINALIZE_OBJECT4:
+      case FINALIZE_OBJECT4_BACKGROUND:
         return 4;
       case FINALIZE_OBJECT8:
+      case FINALIZE_OBJECT8_BACKGROUND:
         return 8;
       case FINALIZE_OBJECT12:
+      case FINALIZE_OBJECT12_BACKGROUND:
         return 12;
       case FINALIZE_OBJECT16:
+      case FINALIZE_OBJECT16_BACKGROUND:
         return 16;
       default:
         JS_NOT_REACHED("Bad object finalize kind");
@@ -96,8 +134,286 @@ GetGCKindSlots(FinalizeKind thingKind)
     }
 }
 
-} /* namespace gc */
-} /* namespace js */
+static inline size_t
+GetGCKindSlots(AllocKind thingKind, Class *clasp)
+{
+    size_t nslots = GetGCKindSlots(thingKind);
+
+    /* An object's private data uses the space taken by its last fixed slot. */
+    if (clasp->flags & JSCLASS_HAS_PRIVATE) {
+        JS_ASSERT(nslots > 0);
+        nslots--;
+    }
+
+    /*
+     * Functions have a larger finalize kind than FINALIZE_OBJECT to reserve
+     * space for the extra fields in JSFunction, but have no fixed slots.
+     */
+    if (clasp == &FunctionClass)
+        nslots = 0;
+
+    return nslots;
+}
+
+static inline void
+GCPoke(JSRuntime *rt, Value oldval)
+{
+    /*
+     * Since we're forcing a GC from JS_GC anyway, don't bother wasting cycles
+     * loading oldval.  XXX remove implied force, fix jsinterp.c's "second arg
+     * ignored", etc.
+     */
+#if 1
+    rt->gcPoke = true;
+#else
+    rt->gcPoke = oldval.isGCThing();
+#endif
+
+#ifdef JS_GC_ZEAL
+    /* Schedule a GC to happen "soon" after a GC poke. */
+    if (rt->gcZeal() == js::gc::ZealPokeValue)
+        rt->gcNextScheduled = 1;
+#endif
+}
+
+class ArenaIter
+{
+    ArenaHeader *aheader;
+    ArenaHeader *remainingHeader;
+
+  public:
+    ArenaIter() {
+        init();
+    }
+
+    ArenaIter(JSCompartment *comp, AllocKind kind) {
+        init(comp, kind);
+    }
+
+    void init() {
+        aheader = NULL;
+        remainingHeader = NULL;
+    }
+
+    void init(ArenaHeader *aheaderArg) {
+        aheader = aheaderArg;
+        remainingHeader = NULL;
+    }
+
+    void init(JSCompartment *comp, AllocKind kind) {
+        aheader = comp->arenas.getFirstArena(kind);
+        remainingHeader = comp->arenas.getFirstArenaToSweep(kind);
+        if (!aheader) {
+            aheader = remainingHeader;
+            remainingHeader = NULL;
+        }
+    }
+
+    bool done() {
+        return !aheader;
+    }
+
+    ArenaHeader *get() {
+        return aheader;
+    }
+
+    void next() {
+        aheader = aheader->next;
+        if (!aheader) {
+            aheader = remainingHeader;
+            remainingHeader = NULL;
+        }
+    }
+};
+
+class CellIterImpl
+{
+    size_t firstThingOffset;
+    size_t thingSize;
+    ArenaIter aiter;
+    FreeSpan firstSpan;
+    const FreeSpan *span;
+    uintptr_t thing;
+    Cell *cell;
+
+  protected:
+    CellIterImpl() {
+    }
+
+    void initSpan(JSCompartment *comp, AllocKind kind) {
+        JS_ASSERT(comp->arenas.isSynchronizedFreeList(kind));
+        firstThingOffset = Arena::firstThingOffset(kind);
+        thingSize = Arena::thingSize(kind);
+        firstSpan.initAsEmpty();
+        span = &firstSpan;
+        thing = span->first;
+    }
+
+    void init(ArenaHeader *singleAheader) {
+        initSpan(singleAheader->compartment, singleAheader->getAllocKind());
+        aiter.init(singleAheader);
+        next();
+        aiter.init();
+    }
+
+    void init(JSCompartment *comp, AllocKind kind) {
+        initSpan(comp, kind);
+        aiter.init(comp, kind);
+        next();
+    }
+
+  public:
+    bool done() const {
+        return !cell;
+    }
+
+    template<typename T> T *get() const {
+        JS_ASSERT(!done());
+        return static_cast<T *>(cell);
+    }
+
+    Cell *getCell() const {
+        JS_ASSERT(!done());
+        return cell;
+    }
+
+    void next() {
+        for (;;) {
+            if (thing != span->first)
+                break;
+            if (JS_LIKELY(span->hasNext())) {
+                thing = span->last + thingSize;
+                span = span->nextSpan();
+                break;
+            }
+            if (aiter.done()) {
+                cell = NULL;
+                return;
+            }
+            ArenaHeader *aheader = aiter.get();
+            firstSpan = aheader->getFirstFreeSpan();
+            span = &firstSpan;
+            thing = aheader->arenaAddress() | firstThingOffset;
+            aiter.next();
+        }
+        cell = reinterpret_cast<Cell *>(thing);
+        thing += thingSize;
+    }
+};
+
+class CellIterUnderGC : public CellIterImpl
+{
+  public:
+    CellIterUnderGC(JSCompartment *comp, AllocKind kind) {
+        JS_ASSERT(comp->rt->isHeapBusy());
+        init(comp, kind);
+    }
+
+    CellIterUnderGC(ArenaHeader *aheader) {
+        JS_ASSERT(aheader->compartment->rt->isHeapBusy());
+        init(aheader);
+    }
+};
+
+/*
+ * When using the iterator outside the GC the caller must ensure that no GC or
+ * allocations of GC things are possible and that the background finalization
+ * for the given thing kind is not enabled or is done.
+ */
+class CellIter : public CellIterImpl
+{
+    ArenaLists *lists;
+    AllocKind kind;
+#ifdef DEBUG
+    size_t *counter;
+#endif
+  public:
+    CellIter(JSCompartment *comp, AllocKind kind)
+      : lists(&comp->arenas),
+        kind(kind)
+    {
+        /*
+         * We have a single-threaded runtime, so there's no need to protect
+         * against other threads iterating or allocating. However, we do have
+         * background finalization; make sure people aren't using CellIter to
+         * walk such allocation kinds.
+         */
+        JS_ASSERT(!IsBackgroundFinalized(kind));
+        if (lists->isSynchronizedFreeList(kind)) {
+            lists = NULL;
+        } else {
+            JS_ASSERT(!comp->rt->isHeapBusy());
+            lists->copyFreeListToArena(kind);
+        }
+#ifdef DEBUG
+        counter = &comp->rt->noGCOrAllocationCheck;
+        ++*counter;
+#endif
+        init(comp, kind);
+    }
+
+    ~CellIter() {
+#ifdef DEBUG
+        JS_ASSERT(*counter > 0);
+        --*counter;
+#endif
+        if (lists)
+            lists->clearFreeListInArena(kind);
+    }
+};
+
+/*
+ * Invoke ArenaOp and CellOp on every arena and cell in a compartment which
+ * have the specified thing kind.
+ */
+template <class ArenaOp, class CellOp>
+void
+ForEachArenaAndCell(JSCompartment *compartment, AllocKind thingKind,
+                    ArenaOp arenaOp, CellOp cellOp)
+{
+    for (ArenaIter aiter(compartment, thingKind); !aiter.done(); aiter.next()) {
+        ArenaHeader *aheader = aiter.get();
+        arenaOp(aheader->getArena());
+        for (CellIterUnderGC iter(aheader); !iter.done(); iter.next())
+            cellOp(iter.getCell());
+    }
+}
+
+/* Signatures for ArenaOp and CellOp above. */
+
+inline void EmptyArenaOp(Arena *arena) {}
+inline void EmptyCellOp(Cell *t) {}
+
+class GCCompartmentsIter {
+  private:
+    JSCompartment **it, **end;
+
+  public:
+    GCCompartmentsIter(JSRuntime *rt) {
+        JS_ASSERT(rt->isHeapBusy());
+        it = rt->compartments.begin();
+        end = rt->compartments.end();
+        if (!(*it)->isCollecting())
+            next();
+    }
+
+    bool done() const { return it == end; }
+
+    void next() {
+        JS_ASSERT(!done());
+        do {
+            it++;
+        } while (it != end && !(*it)->isCollecting());
+    }
+
+    JSCompartment *get() const {
+        JS_ASSERT(!done());
+        return *it;
+    }
+
+    operator JSCompartment *() const { return get(); }
+    JSCompartment *operator->() const { return get(); }
+};
 
 /*
  * Allocates a new GC thing. After a successful allocation the caller must
@@ -107,577 +423,125 @@ GetGCKindSlots(FinalizeKind thingKind)
  */
 
 template <typename T>
-JS_ALWAYS_INLINE T *
-NewFinalizableGCThing(JSContext *cx, unsigned thingKind)
+inline T *
+NewGCThing(JSContext *cx, js::gc::AllocKind kind, size_t thingSize)
 {
-    JS_ASSERT(thingKind < js::gc::FINALIZE_LIMIT);
-#ifdef JS_THREADSAFE
-    JS_ASSERT_IF((cx->compartment == cx->runtime->atomsCompartment),
-                 (thingKind == js::gc::FINALIZE_STRING) ||
-                 (thingKind == js::gc::FINALIZE_SHORT_STRING));
+    JS_ASSERT(thingSize == js::gc::Arena::thingSize(kind));
+    JS_ASSERT_IF(cx->compartment == cx->runtime->atomsCompartment,
+                 kind == js::gc::FINALIZE_STRING || kind == js::gc::FINALIZE_SHORT_STRING);
+    JS_ASSERT(!cx->runtime->isHeapBusy());
+    JS_ASSERT(!cx->runtime->noGCOrAllocationCheck);
+
+    /* For testing out of memory conditions */
+    JS_OOM_POSSIBLY_FAIL_REPORT(cx);
+
+#ifdef JS_GC_ZEAL
+    if (cx->runtime->needZealousGC())
+        js::gc::RunDebugGC(cx);
 #endif
 
-    METER(cx->compartment->compartmentStats[thingKind].alloc++);
-    do {
-        js::gc::FreeCell *cell = cx->compartment->freeLists.getNext(thingKind);
-        if (cell) {
-            CheckGCFreeListLink(cell);
-            return (T *)cell;
-        }
-        if (!RefillFinalizableFreeList(cx, thingKind))
-            return NULL;
-    } while (true);
+    MaybeCheckStackRoots(cx, /* relax = */ false);
+
+    JSCompartment *comp = cx->compartment;
+    void *t = comp->arenas.allocateFromFreeList(kind, thingSize);
+    if (!t)
+        t = js::gc::ArenaLists::refillFreeList(cx, kind);
+
+    JS_ASSERT_IF(t && comp->wasGCStarted() && comp->needsBarrier(),
+                 static_cast<T *>(t)->arenaHeader()->allocatedDuringIncremental);
+
+#if defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)
+    if (cx->runtime->gcVerifyPostData && IsNurseryAllocable(kind) && !IsAtomsCompartment(comp))
+        comp->gcNursery.insertPointer(t);
+#endif
+    return static_cast<T *>(t);
 }
 
-#undef METER
-#undef METER_IF
+/* Alternate form which allocates a GC thing if doing so cannot trigger a GC. */
+template <typename T>
+inline T *
+TryNewGCThing(JSContext *cx, js::gc::AllocKind kind, size_t thingSize)
+{
+    JS_ASSERT(thingSize == js::gc::Arena::thingSize(kind));
+    JS_ASSERT_IF(cx->compartment == cx->runtime->atomsCompartment,
+                 kind == js::gc::FINALIZE_STRING || kind == js::gc::FINALIZE_SHORT_STRING);
+    JS_ASSERT(!cx->runtime->isHeapBusy());
+    JS_ASSERT(!cx->runtime->noGCOrAllocationCheck);
+
+#ifdef JS_GC_ZEAL
+    if (cx->runtime->needZealousGC())
+        return NULL;
+#endif
+
+    void *t = cx->compartment->arenas.allocateFromFreeList(kind, thingSize);
+    JS_ASSERT_IF(t && cx->compartment->wasGCStarted() && cx->compartment->needsBarrier(),
+                 static_cast<T *>(t)->arenaHeader()->allocatedDuringIncremental);
+
+#if defined(JSGC_GENERATIONAL) && defined(JS_GC_ZEAL)
+    JSCompartment *comp = cx->compartment;
+    if (cx->runtime->gcVerifyPostData && IsNurseryAllocable(kind) && !IsAtomsCompartment(comp))
+        comp->gcNursery.insertPointer(t);
+#endif
+    return static_cast<T *>(t);
+}
+
+} /* namespace gc */
+} /* namespace js */
 
 inline JSObject *
-js_NewGCObject(JSContext *cx, js::gc::FinalizeKind kind)
+js_NewGCObject(JSContext *cx, js::gc::AllocKind kind)
 {
     JS_ASSERT(kind >= js::gc::FINALIZE_OBJECT0 && kind <= js::gc::FINALIZE_OBJECT_LAST);
-    JSObject *obj = NewFinalizableGCThing<JSObject>(cx, kind);
-    if (obj)
-        obj->capacity = js::gc::GetGCKindSlots(kind);
-    return obj;
+    return js::gc::NewGCThing<JSObject>(cx, kind, js::gc::Arena::thingSize(kind));
+}
+
+inline JSObject *
+js_TryNewGCObject(JSContext *cx, js::gc::AllocKind kind)
+{
+    JS_ASSERT(kind >= js::gc::FINALIZE_OBJECT0 && kind <= js::gc::FINALIZE_OBJECT_LAST);
+    return js::gc::TryNewGCThing<JSObject>(cx, kind, js::gc::Arena::thingSize(kind));
 }
 
 inline JSString *
 js_NewGCString(JSContext *cx)
 {
-    return NewFinalizableGCThing<JSString>(cx, js::gc::FINALIZE_STRING);    
+    return js::gc::NewGCThing<JSString>(cx, js::gc::FINALIZE_STRING, sizeof(JSString));
 }
 
 inline JSShortString *
 js_NewGCShortString(JSContext *cx)
 {
-    return NewFinalizableGCThing<JSShortString>(cx, js::gc::FINALIZE_SHORT_STRING);
+    return js::gc::NewGCThing<JSShortString>(cx, js::gc::FINALIZE_SHORT_STRING, sizeof(JSShortString));
 }
 
 inline JSExternalString *
-js_NewGCExternalString(JSContext *cx, uintN type)
+js_NewGCExternalString(JSContext *cx)
 {
-    JS_ASSERT(type < JSExternalString::TYPE_LIMIT);
-    JSExternalString *str = NewFinalizableGCThing<JSExternalString>(cx, js::gc::FINALIZE_EXTERNAL_STRING);
-    return str;
+    return js::gc::NewGCThing<JSExternalString>(cx, js::gc::FINALIZE_EXTERNAL_STRING,
+                                                sizeof(JSExternalString));
 }
 
-inline JSFunction*
-js_NewGCFunction(JSContext *cx)
+inline JSScript *
+js_NewGCScript(JSContext *cx)
 {
-    JSFunction *fun = NewFinalizableGCThing<JSFunction>(cx, js::gc::FINALIZE_FUNCTION);
-    if (fun)
-        fun->capacity = JSObject::FUN_CLASS_RESERVED_SLOTS;
-    return fun;
+    return js::gc::NewGCThing<JSScript>(cx, js::gc::FINALIZE_SCRIPT, sizeof(JSScript));
+}
+
+inline js::Shape *
+js_NewGCShape(JSContext *cx)
+{
+    return js::gc::NewGCThing<js::Shape>(cx, js::gc::FINALIZE_SHAPE, sizeof(js::Shape));
+}
+
+inline js::BaseShape *
+js_NewGCBaseShape(JSContext *cx)
+{
+    return js::gc::NewGCThing<js::BaseShape>(cx, js::gc::FINALIZE_BASE_SHAPE, sizeof(js::BaseShape));
 }
 
 #if JS_HAS_XML_SUPPORT
-inline JSXML *
-js_NewGCXML(JSContext *cx)
-{
-    return NewFinalizableGCThing<JSXML>(cx, js::gc::FINALIZE_XML);
-}
+extern JSXML *
+js_NewGCXML(JSContext *cx);
 #endif
-
-namespace js {
-namespace gc {
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSXML *thing);
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSObject *thing);
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSFunction *thing);
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSShortString *thing);
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSString *thing);
-
-template<typename T>
-static JS_ALWAYS_INLINE void
-Mark(JSTracer *trc, T *thing)
-{
-    JS_ASSERT(thing);
-    JS_ASSERT(JS_IS_VALID_TRACE_KIND(GetGCThingTraceKind(thing)));
-    JS_ASSERT(trc->debugPrinter || trc->debugPrintArg);
-
-    /* Per-Compartment GC only with GCMarker and no custom JSTracer */
-    JS_ASSERT_IF(trc->context->runtime->gcCurrentCompartment, IS_GC_MARKING_TRACER(trc));
-
-    JSRuntime *rt = trc->context->runtime;
-    /* Don't mark things outside a compartment if we are in a per-compartment GC */
-    if (rt->gcCurrentCompartment && thing->asCell()->compartment() != rt->gcCurrentCompartment)
-        goto out;
-
-    if (!IS_GC_MARKING_TRACER(trc)) {
-        uint32 kind = GetGCThingTraceKind(thing);
-        trc->callback(trc, thing, kind);
-        goto out;
-    }
-
-    TypedMarker(trc, thing);
-
-  out:
-#ifdef DEBUG
-    trc->debugPrinter = NULL;
-    trc->debugPrintArg = NULL;
-#endif
-    return;     /* to avoid out: right_curl when DEBUG is not defined */
-}
-
-static inline void
-MarkString(JSTracer *trc, JSString *str)
-{
-    JS_ASSERT(str);
-    if (JSString::isStatic(str))
-        return;
-    JS_ASSERT(GetArena<JSString>((Cell *)str)->assureThingIsAligned((JSString *)str));
-    Mark(trc, str);
-}
-
-static inline void
-MarkString(JSTracer *trc, JSString *str, const char *name)
-{
-    JS_ASSERT(str);
-    JS_SET_TRACING_NAME(trc, name);
-    MarkString(trc, str);
-}
-
-static inline void
-MarkObject(JSTracer *trc, JSObject &obj, const char *name)
-{
-    JS_ASSERT(trc);
-    JS_ASSERT(&obj);
-    JS_SET_TRACING_NAME(trc, name);
-    JS_ASSERT(GetArena<JSObject>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSObject_Slots2>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSObject_Slots4>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSObject_Slots8>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSObject_Slots12>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSObject_Slots16>((Cell *)&obj)->assureThingIsAligned(&obj) ||
-              GetArena<JSFunction>((Cell *)&obj)->assureThingIsAligned(&obj));
-    Mark(trc, &obj);
-}
-
-static inline void
-MarkChildren(JSTracer *trc, JSObject *obj)
-{
-    /* If obj has no map, it must be a newborn. */
-    if (!obj->map)
-        return;
-
-    /* Trace universal (ops-independent) members. */
-    if (JSObject *proto = obj->getProto())
-        MarkObject(trc, *proto, "proto");
-    if (JSObject *parent = obj->getParent())
-        MarkObject(trc, *parent, "parent");
-
-    if (obj->emptyShapes) {
-        int count = FINALIZE_OBJECT_LAST - FINALIZE_OBJECT0 + 1;
-        for (int i = 0; i < count; i++) {
-            if (obj->emptyShapes[i])
-                obj->emptyShapes[i]->trace(trc);
-        }
-    }
-
-    /* Delegate to ops or the native marking op. */
-    TraceOp op = obj->getOps()->trace;
-    (op ? op : js_TraceObject)(trc, obj);
-}
-
-static inline void
-MarkChildren(JSTracer *trc, JSString *str)
-{
-    if (str->isDependent())
-        MarkString(trc, str->dependentBase(), "base");
-    else if (str->isRope()) {
-        MarkString(trc, str->ropeLeft(), "left child");
-        MarkString(trc, str->ropeRight(), "right child");
-    }
-}
-
-#ifdef JS_HAS_XML_SUPPORT
-static inline void
-MarkChildren(JSTracer *trc, JSXML *xml)
-{
-    js_TraceXML(trc, xml);
-}
-#endif
-
-static inline bool
-RecursionTooDeep(GCMarker *gcmarker) {
-#ifdef JS_GC_ASSUME_LOW_C_STACK
-    return true;
-#else
-    int stackDummy;
-    return !JS_CHECK_STACK_SIZE(gcmarker->stackLimit, &stackDummy);
-#endif
-}
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSXML *thing)
-{
-    if (!reinterpret_cast<Cell *>(thing)->markIfUnmarked(reinterpret_cast<GCMarker *>(trc)->getMarkColor()))
-        return;
-    GCMarker *gcmarker = static_cast<GCMarker *>(trc);
-    if (RecursionTooDeep(gcmarker)) {
-        gcmarker->delayMarkingChildren(thing);
-    } else {
-        MarkChildren(trc, thing);
-    }
-}
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSObject *thing)
-{
-    JS_ASSERT(thing);
-    JS_ASSERT(JSTRACE_OBJECT == GetFinalizableTraceKind(thing->asCell()->arena()->header()->thingKind));
-
-    GCMarker *gcmarker = static_cast<GCMarker *>(trc);
-    if (!thing->markIfUnmarked(gcmarker->getMarkColor()))
-        return;
-    
-    if (RecursionTooDeep(gcmarker)) {
-        gcmarker->delayMarkingChildren(thing);
-    } else {
-        MarkChildren(trc, thing);
-    }
-}
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSFunction *thing)
-{
-    JS_ASSERT(thing);
-    JS_ASSERT(JSTRACE_OBJECT == GetFinalizableTraceKind(thing->asCell()->arena()->header()->thingKind));
-
-    GCMarker *gcmarker = static_cast<GCMarker *>(trc);
-    if (!thing->markIfUnmarked(gcmarker->getMarkColor()))
-        return;
-
-    if (RecursionTooDeep(gcmarker)) {
-        gcmarker->delayMarkingChildren(thing);
-    } else {
-        MarkChildren(trc, static_cast<JSObject *>(thing));
-    }
-}
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSShortString *thing)
-{
-    /*
-     * A short string cannot refer to other GC things so we don't have
-     * anything to mark if the string was unmarked and ignore the
-     * markIfUnmarked result.
-     */
-    (void) thing->asCell()->markIfUnmarked();
-}
-
-}  /* namespace gc */
-
-namespace detail {
-
-static JS_ALWAYS_INLINE JSString *
-Tag(JSString *str)
-{
-    JS_ASSERT(!(size_t(str) & 1));
-    return (JSString *)(size_t(str) | 1);
-}
-
-static JS_ALWAYS_INLINE bool
-Tagged(JSString *str)
-{
-    return (size_t(str) & 1) != 0;
-}
-
-static JS_ALWAYS_INLINE JSString *
-Untag(JSString *str)
-{
-    JS_ASSERT((size_t(str) & 1) == 1);
-    return (JSString *)(size_t(str) & ~size_t(1));
-}
-
-static JS_ALWAYS_INLINE void
-NonRopeTypedMarker(JSRuntime *rt, JSString *str)
-{
-    /* N.B. The base of a dependent string is not necessarily flat. */
-    JS_ASSERT(!str->isRope());
-
-    if (rt->gcCurrentCompartment) {
-        for (;;) {
-            if (JSString::isStatic(str))
-                break;
-
-            /* 
-             * If we perform single-compartment GC don't mark Strings outside the current compartment.
-             * Dependent Strings are not shared between compartments and they can't be in the atomsCompartment.
-             */
-            if (str->asCell()->compartment() != rt->gcCurrentCompartment) {
-                JS_ASSERT(str->asCell()->compartment() == rt->atomsCompartment);
-                break;
-            }
-            if (!str->asCell()->markIfUnmarked())
-                break;
-            if (!str->isDependent())
-                break;
-            str = str->dependentBase();
-        }
-    } else {
-        while (!JSString::isStatic(str) &&
-               str->asCell()->markIfUnmarked() &&
-               str->isDependent()) {
-            str = str->dependentBase();
-        }
-    }
-}
-
-}  /* namespace detail */
-
-namespace gc {
-
-static JS_ALWAYS_INLINE void
-TypedMarker(JSTracer *trc, JSString *str)
-{
-    using namespace detail;
-    JSRuntime *rt = trc->context->runtime;
-    JS_ASSERT(!JSString::isStatic(str));
-#ifdef DEBUG
-    JSCompartment *strComp = str->asCell()->compartment();
-#endif
-    if (!str->isRope()) {
-        NonRopeTypedMarker(rt, str);
-        return;
-    }
-
-    /*
-     * This function must not fail, so a simple stack-based traversal must not
-     * be used (since it may oom if the stack grows large). Instead, strings
-     * are temporarily mutated to embed parent pointers as they are traversed.
-     * This algorithm is homomorphic to JSString::flatten.
-     */
-    JSString *parent = NULL;
-    first_visit_node: {
-        JS_ASSERT(strComp == str->asCell()->compartment() || str->asCell()->compartment() == rt->atomsCompartment);
-        JS_ASSERT(!JSString::isStatic(str));
-        if (!str->asCell()->markIfUnmarked())
-            goto finish_node;
-        JSString *left = str->ropeLeft();
-        if (left->isRope()) {
-            JS_ASSERT(!Tagged(str->u.left) && !Tagged(str->s.right));
-            str->u.left = Tag(parent);
-            parent = str;
-            str = left;
-            goto first_visit_node;
-        }
-        JS_ASSERT_IF(!JSString::isStatic(left), 
-                     strComp == left->asCell()->compartment()
-                     || left->asCell()->compartment() == rt->atomsCompartment);
-        NonRopeTypedMarker(rt, left);
-    }
-    visit_right_child: {
-        JSString *right = str->ropeRight();
-        if (right->isRope()) {
-            JS_ASSERT(!Tagged(str->u.left) && !Tagged(str->s.right));
-            str->s.right = Tag(parent);
-            parent = str;
-            str = right;
-            goto first_visit_node;
-        }
-        JS_ASSERT_IF(!JSString::isStatic(right), 
-                     strComp == right->asCell()->compartment()
-                     || right->asCell()->compartment() == rt->atomsCompartment);
-        NonRopeTypedMarker(rt, right);
-    }
-    finish_node: {
-        if (!parent)
-            return;
-        if (Tagged(parent->u.left)) {
-            JS_ASSERT(!Tagged(parent->s.right));
-            JSString *nextParent = Untag(parent->u.left);
-            parent->u.left = str;
-            str = parent;
-            parent = nextParent;
-            goto visit_right_child;
-        }
-        JS_ASSERT(Tagged(parent->s.right));
-        JSString *nextParent = Untag(parent->s.right);
-        parent->s.right = str;
-        str = parent;
-        parent = nextParent;
-        goto finish_node;
-    }
-}
-
-static inline void
-MarkAtomRange(JSTracer *trc, size_t len, JSAtom **vec, const char *name)
-{
-    for (uint32 i = 0; i < len; i++) {
-        if (JSAtom *atom = vec[i]) {
-            JS_SET_TRACING_INDEX(trc, name, i);
-            JSString *str = ATOM_TO_STRING(atom);
-            if (!JSString::isStatic(str))
-                Mark(trc, str);
-        }
-    }
-}
-
-static inline void
-MarkObjectRange(JSTracer *trc, size_t len, JSObject **vec, const char *name)
-{
-    for (uint32 i = 0; i < len; i++) {
-        if (JSObject *obj = vec[i]) {
-            JS_SET_TRACING_INDEX(trc, name, i);
-            Mark(trc, obj);
-        }
-    }
-}
-
-static inline void
-MarkId(JSTracer *trc, jsid id)
-{
-    if (JSID_IS_STRING(id)) {
-        JSString *str = JSID_TO_STRING(id);
-        if (!JSString::isStatic(str))
-            Mark(trc, str);
-    }
-    else if (JS_UNLIKELY(JSID_IS_OBJECT(id)))
-        Mark(trc, JSID_TO_OBJECT(id));
-}
-
-static inline void
-MarkId(JSTracer *trc, jsid id, const char *name)
-{
-    JS_SET_TRACING_NAME(trc, name);
-    MarkId(trc, id);
-}
-
-static inline void
-MarkIdRange(JSTracer *trc, jsid *beg, jsid *end, const char *name)
-{
-    for (jsid *idp = beg; idp != end; ++idp) {
-        JS_SET_TRACING_INDEX(trc, name, (idp - beg));
-        MarkId(trc, *idp);
-    }
-}
-
-static inline void
-MarkIdRange(JSTracer *trc, size_t len, jsid *vec, const char *name)
-{
-    MarkIdRange(trc, vec, vec + len, name);
-}
-
-static inline void
-MarkKind(JSTracer *trc, void *thing, uint32 kind)
-{
-    JS_ASSERT(thing);
-    JS_ASSERT(kind == GetGCThingTraceKind(thing));
-    switch (kind) {
-        case JSTRACE_OBJECT:
-            Mark(trc, reinterpret_cast<JSObject *>(thing));
-            break;
-        case JSTRACE_STRING:
-            MarkString(trc, reinterpret_cast<JSString *>(thing));
-            break;
-#if JS_HAS_XML_SUPPORT
-        case JSTRACE_XML:
-            Mark(trc, reinterpret_cast<JSXML *>(thing));
-            break;
-#endif
-        default:
-            JS_ASSERT(false);
-    }
-}
-
-/* N.B. Assumes JS_SET_TRACING_NAME/INDEX has already been called. */
-static inline void
-MarkValueRaw(JSTracer *trc, const js::Value &v)
-{
-    if (v.isMarkable()) {
-        JS_ASSERT(v.toGCThing());
-        return MarkKind(trc, v.toGCThing(), v.gcKind());
-    }
-}
-
-static inline void
-MarkValue(JSTracer *trc, const js::Value &v, const char *name)
-{
-    JS_SET_TRACING_NAME(trc, name);
-    MarkValueRaw(trc, v);
-}
-
-static inline void
-MarkValueRange(JSTracer *trc, Value *beg, Value *end, const char *name)
-{
-    for (Value *vp = beg; vp < end; ++vp) {
-        JS_SET_TRACING_INDEX(trc, name, vp - beg);
-        MarkValueRaw(trc, *vp);
-    }
-}
-
-static inline void
-MarkValueRange(JSTracer *trc, size_t len, Value *vec, const char *name)
-{
-    MarkValueRange(trc, vec, vec + len, name);
-}
-
-static inline void
-MarkShapeRange(JSTracer *trc, const Shape **beg, const Shape **end, const char *name)
-{
-    for (const Shape **sp = beg; sp < end; ++sp) {
-        JS_SET_TRACING_INDEX(trc, name, sp - beg);
-        (*sp)->trace(trc);
-    }
-}
-
-static inline void
-MarkShapeRange(JSTracer *trc, size_t len, const Shape **vec, const char *name)
-{
-    MarkShapeRange(trc, vec, vec + len, name);
-}
-
-/* N.B. Assumes JS_SET_TRACING_NAME/INDEX has already been called. */
-static inline void
-MarkGCThing(JSTracer *trc, void *thing, uint32 kind)
-{
-    if (!thing)
-        return;
-
-    MarkKind(trc, thing, kind);
-}
-
-static inline void
-MarkGCThing(JSTracer *trc, void *thing)
-{
-    if (!thing)
-        return;
-    MarkKind(trc, thing, GetGCThingTraceKind(thing));
-}
-
-static inline void
-MarkGCThing(JSTracer *trc, void *thing, const char *name)
-{
-    JS_SET_TRACING_NAME(trc, name);
-    MarkGCThing(trc, thing);
-}
-
-static inline void
-MarkGCThing(JSTracer *trc, void *thing, const char *name, size_t index)
-{
-    JS_SET_TRACING_INDEX(trc, name, index);
-    MarkGCThing(trc, thing);
-}
-
-static inline void
-Mark(JSTracer *trc, void *thing, uint32 kind, const char *name)
-{
-    JS_ASSERT(thing);
-    JS_SET_TRACING_NAME(trc, name);
-    MarkKind(trc, thing, kind);
-}
-
-}}
 
 #endif /* jsgcinlines_h___ */

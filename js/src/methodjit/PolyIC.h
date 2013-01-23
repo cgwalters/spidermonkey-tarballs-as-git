@@ -1,50 +1,17 @@
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*-
  * vim: set ts=4 sw=4 et tw=99:
  *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is Mozilla SpiderMonkey JavaScript 1.9 code, released
- * May 28, 2008.
- *
- * The Initial Developer of the Original Code is
- *   Brendan Eich <brendan@mozilla.org>
- *
- * Contributor(s):
- *   David Mandelin <dmandelin@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #if !defined jsjaeger_poly_ic_h__ && defined JS_METHODJIT
 #define jsjaeger_poly_ic_h__
 
 #include "jscntxt.h"
-#include "jstl.h"
-#include "jsvector.h"
 #include "assembler/assembler/MacroAssembler.h"
 #include "assembler/assembler/CodeLocation.h"
+#include "js/Vector.h"
 #include "methodjit/MethodJIT.h"
 #include "methodjit/ICRepatcher.h"
 #include "BaseAssembler.h"
@@ -58,19 +25,17 @@ namespace mjit {
 namespace ic {
 
 /* Maximum number of stubs for a given callsite. */
-static const uint32 MAX_PIC_STUBS = 16;
-static const uint32 MAX_GETELEM_IC_STUBS = 17;
-
-void PurgePICs(JSContext *cx);
+static const uint32_t MAX_PIC_STUBS = 16;
+static const uint32_t MAX_GETELEM_IC_STUBS = 17;
 
 enum LookupStatus {
     Lookup_Error = 0,
     Lookup_Uncacheable,
-    Lookup_Cacheable
+    Lookup_Cacheable,
+    Lookup_NoProperty
 };
 
 struct BaseIC : public MacroAssemblerTypedefs {
-    BaseIC() { }
 
     // Address of inline fast-path.
     CodeLocationLabel fastPathStart;
@@ -84,31 +49,37 @@ struct BaseIC : public MacroAssemblerTypedefs {
     // Slow path stub call.
     CodeLocationCall slowPathCall;
 
+    // Offset from start of stub to jump target of second shape guard as Nitro
+    // asm data location. This is 0 if there is only one shape guard in the
+    // last stub.
+    int32_t secondShapeGuard;
+
     // Whether or not the callsite has been hit at least once.
     bool hit : 1;
     bool slowCallPatched : 1;
 
+    // Whether getter/setter hooks can be called from IC stubs.
+    bool canCallHook : 1;
+
+    // Whether a type barrier is in place for the result of the op.
+    bool forcedTypeBarrier : 1;
+
     // Number of stubs generated.
-    uint32 stubsGenerated : 5;
+    uint32_t stubsGenerated : 5;
 
-    // Offset from start of stub to jump target of second shape guard as Nitro
-    // asm data location. This is 0 if there is only one shape guard in the
-    // last stub.
-    int secondShapeGuard : 11;
+    bool shouldUpdate(VMFrame &f);
+    void spew(VMFrame &f, const char *event, const char *reason);
+    LookupStatus disable(VMFrame &f, const char *reason, void *stub);
+    void updatePCCounters(VMFrame &f, Assembler &masm);
 
-    // Opcode this was compiled for.
-    JSOp op : 9;
-
+  protected:
     void reset() {
         hit = false;
         slowCallPatched = false;
+        forcedTypeBarrier = false;
         stubsGenerated = 0;
         secondShapeGuard = 0;
     }
-    bool shouldUpdate(JSContext *cx);
-    void spew(JSContext *cx, const char *event, const char *reason);
-    LookupStatus disable(JSContext *cx, const char *reason, void *stub);
-    bool isCallOp();
 };
 
 class BasePolyIC : public BaseIC {
@@ -150,40 +121,6 @@ class BasePolyIC : public BaseIC {
     }
 
   public:
-    BasePolyIC() {
-        u.execPool = NULL;
-    }
-
-    ~BasePolyIC() {
-        releasePools();
-        if (areMultiplePools())
-            js_delete(multiplePools());
-    }
-
-    void reset() {
-        BaseIC::reset();
-        releasePools();
-        if (areZeroPools()) {
-            // Common case:  do nothing.
-        } else if (isOnePool()) {
-            u.execPool = NULL;
-        } else {
-            multiplePools()->clear();
-        }
-    }
-
-    void releasePools() {
-        if (areZeroPools()) {
-            // Common case:  do nothing.
-        } else if (isOnePool()) {
-            u.execPool->release();
-        } else {
-            ExecPoolVector *execPools = multiplePools();
-            for (size_t i = 0; i < execPools->length(); i++)
-                (*execPools)[i]->release();
-        }
-    }
-
     bool addPool(JSContext *cx, JSC::ExecutablePool *pool) {
         if (areZeroPools()) {
             u.execPool = pool;
@@ -192,22 +129,39 @@ class BasePolyIC : public BaseIC {
         if (isOnePool()) {
             JSC::ExecutablePool *oldPool = u.execPool;
             JS_ASSERT(!isTagged(oldPool));
-            ExecPoolVector *execPools = js_new<ExecPoolVector>(SystemAllocPolicy()); 
+            ExecPoolVector *execPools = OffTheBooks::new_<ExecPoolVector>(SystemAllocPolicy());
             if (!execPools)
                 return false;
             if (!execPools->append(oldPool) || !execPools->append(pool)) {
-                js_delete(execPools);
+                Foreground::delete_(execPools);
                 return false;
             }
             u.taggedExecPools = tag(execPools);
             return true;
         }
-        return multiplePools()->append(pool); 
+        return multiplePools()->append(pool);
+    }
+
+  protected:
+    void reset() {
+        BaseIC::reset();
+        if (areZeroPools()) {
+            // Common case:  do nothing.
+        } else if (isOnePool()) {
+            u.execPool->release();
+            u.execPool = NULL;
+        } else {
+            ExecPoolVector *execPools = multiplePools();
+            for (size_t i = 0; i < execPools->length(); i++)
+                (*execPools)[i]->release();
+            Foreground::delete_(execPools);
+            u.execPool = NULL;
+        }
+        JS_ASSERT(areZeroPools());
     }
 };
 
 struct GetElementIC : public BasePolyIC {
-    GetElementIC() { reset(); }
 
     // On stub entry:
     //   If hasInlineTypeCheck() is true, and inlineTypeCheckPatched is false,
@@ -228,22 +182,22 @@ struct GetElementIC : public BasePolyIC {
     // This is only set if hasInlineTypeCheck() is true.
     unsigned inlineTypeGuard  : 8;
 
-    // Offset from the fast path to the inline clasp guard. This is always
+    // Offset from the fast path to the inline shape guard. This is always
     // set; if |id| is known to not be int32, then it's an unconditional
     // jump to the slow path.
-    unsigned inlineClaspGuard : 8;
+    unsigned inlineShapeGuard : 8;
 
     // This is usable if hasInlineTypeGuard() returns true, which implies
     // that a dense array fast path exists. The inline type guard serves as
     // the head of the chain of all string-based element stubs.
     bool inlineTypeGuardPatched : 1;
 
-    // This is always usable, and specifies whether the inline clasp guard
+    // This is always usable, and specifies whether the inline shape guard
     // has been patched. If hasInlineTypeGuard() is true, it guards against
     // a dense array, and guarantees the inline type guard has passed.
-    // Otherwise, there is no inline type guard, and the clasp guard is just
+    // Otherwise, there is no inline type guard, and the shape guard is just
     // an unconditional jump.
-    bool inlineClaspGuardPatched : 1;
+    bool inlineShapeGuardPatched : 1;
 
     ////////////////////////////////////////////
     // State for string-based property stubs. //
@@ -255,9 +209,9 @@ struct GetElementIC : public BasePolyIC {
     // These offsets are used for string-key dependent stubs, such as named
     // property accesses. They are separated from the int-key dependent stubs,
     // in order to guarantee that the id type needs only one guard per type.
-    int atomGuard : 8;          // optional, non-zero if present
-    int firstShapeGuard : 8;    // always set
-    int secondShapeGuard : 8;   // optional, non-zero if present
+    int32_t atomGuard : 8;          // optional, non-zero if present
+    int32_t firstShapeGuard : 11;    // always set
+    int32_t secondShapeGuard : 11;   // optional, non-zero if present
 
     bool hasLastStringStub : 1;
     JITCode lastStringStub;
@@ -277,38 +231,35 @@ struct GetElementIC : public BasePolyIC {
     bool shouldPatchInlineTypeGuard() {
         return hasInlineTypeGuard() && !inlineTypeGuardPatched;
     }
-    bool shouldPatchUnconditionalClaspGuard() {
-        // The clasp guard is only unconditional if the type is known to not
+    bool shouldPatchUnconditionalShapeGuard() {
+        // The shape guard is only unconditional if the type is known to not
         // be an int32.
         if (idRemat.isTypeKnown() && idRemat.knownType() != JSVAL_TYPE_INT32)
-            return !inlineClaspGuardPatched;
+            return !inlineShapeGuardPatched;
         return false;
     }
 
+    void purge(Repatcher &repatcher);
+    LookupStatus update(VMFrame &f, HandleObject obj, HandleValue v, HandleId id, MutableHandleValue vp);
+    LookupStatus attachGetProp(VMFrame &f, HandleObject obj, HandleValue v, HandlePropertyName name,
+                               MutableHandleValue vp);
+    LookupStatus attachTypedArray(VMFrame &f, HandleObject obj, HandleValue v, HandleId id,
+                                  MutableHandleValue vp);
+    LookupStatus disable(VMFrame &f, const char *reason);
+    LookupStatus error(JSContext *cx);
+    bool shouldUpdate(VMFrame &f);
+
+  protected:
     void reset() {
         BasePolyIC::reset();
         inlineTypeGuardPatched = false;
-        inlineClaspGuardPatched = false;
+        inlineShapeGuardPatched = false;
         typeRegHasBaseShape = false;
         hasLastStringStub = false;
     }
-    void purge(Repatcher &repatcher);
-    LookupStatus update(JSContext *cx, JSObject *obj, const Value &v, jsid id, Value *vp);
-    LookupStatus attachGetProp(JSContext *cx, JSObject *obj, const Value &v, jsid id,
-                               Value *vp);
-    LookupStatus attachTypedArray(JSContext *cx, JSObject *obj, const Value &v, jsid id,
-                                  Value *vp);
-    LookupStatus disable(JSContext *cx, const char *reason);
-    LookupStatus error(JSContext *cx);
-    bool shouldUpdate(JSContext *cx);
 };
 
 struct SetElementIC : public BaseIC {
-    SetElementIC() : execPool(NULL) { reset(); }
-    ~SetElementIC() {
-        if (execPool)
-            execPool->release();
-    }
 
     // On stub entry:
     //   objReg contains the payload of the |obj| parameter.
@@ -317,13 +268,13 @@ struct SetElementIC : public BaseIC {
     RegisterID objReg    : 5;
 
     // Information on how to rematerialize |objReg|.
-    int32 objRemat       : MIN_STATE_REMAT_BITS;
+    int32_t objRemat       : MIN_STATE_REMAT_BITS;
 
-    // Offset from the start of the fast path to the inline clasp guard.
-    unsigned inlineClaspGuard : 6;
+    // Offset from the start of the fast path to the inline shape guard.
+    unsigned inlineShapeGuard : 6;
 
-    // True if the clasp guard has been patched; false otherwise.
-    bool inlineClaspGuardPatched : 1;
+    // True if the shape guard has been patched; false otherwise.
+    bool inlineShapeGuardPatched : 1;
 
     // Offset from the start of the fast path to the inline hole guard.
     unsigned inlineHoleGuard : 8;
@@ -336,14 +287,14 @@ struct SetElementIC : public BaseIC {
 
     // A bitmask of registers that are volatile and must be preserved across
     // stub calls inside the IC.
-    uint32 volatileMask : 16;
+    uint32_t volatileMask;
 
     // If true, then keyValue contains a constant index value >= 0. Otherwise,
     // keyReg contains a dynamic integer index in any range.
     bool hasConstantKey : 1;
     union {
         RegisterID keyReg;
-        int32      keyValue;
+        int32_t    keyValue;
     };
 
     // Rematerialize information about the value being stored.
@@ -352,20 +303,24 @@ struct SetElementIC : public BaseIC {
     // Optional executable pool for the out-of-line hole stub.
     JSC::ExecutablePool *execPool;
 
+    void purge(Repatcher &repatcher);
+    LookupStatus attachTypedArray(VMFrame &f, JSObject *obj, int32_t key);
+    LookupStatus attachHoleStub(VMFrame &f, JSObject *obj, int32_t key);
+    LookupStatus update(VMFrame &f, const Value &objval, const Value &idval);
+    LookupStatus disable(VMFrame &f, const char *reason);
+    LookupStatus error(JSContext *cx);
+    bool shouldUpdate(VMFrame &f);
+
+  protected:
     void reset() {
         BaseIC::reset();
-        if (execPool != NULL)
+        if (execPool) {
             execPool->release();
-        execPool = NULL;
-        inlineClaspGuardPatched = false;
+            execPool = NULL;
+        }
+        inlineShapeGuardPatched = false;
         inlineHoleGuardPatched = false;
     }
-    void purge(Repatcher &repatcher);
-    LookupStatus attachTypedArray(JSContext *cx, JSObject *obj, int32 key);
-    LookupStatus attachHoleStub(JSContext *cx, JSObject *obj, int32 key);
-    LookupStatus update(JSContext *cx, const Value &objval, const Value &idval);
-    LookupStatus disable(JSContext *cx, const char *reason);
-    LookupStatus error(JSContext *cx);
 };
 
 struct PICInfo : public BasePolyIC {
@@ -378,9 +333,7 @@ struct PICInfo : public BasePolyIC {
 #endif
     {
         GET,        // JSOP_GETPROP
-        CALL,       // JSOP_CALLPROP
         SET,        // JSOP_SETPROP, JSOP_SETNAME
-        SETMETHOD,  // JSOP_SETMETHOD
         NAME,       // JSOP_NAME
         BIND,       // JSOP_BINDNAME
         XNAME       // JSOP_GETXPROP
@@ -392,7 +345,7 @@ struct PICInfo : public BasePolyIC {
             bool hasTypeCheck   : 1;  // type check and reg are present
 
             // Reverse offset from slowPathStart to the type check slow path.
-            int32 typeCheckOffset;
+            int32_t typeCheckOffset;
         } get;
         ValueRemat vr;
     } u;
@@ -421,9 +374,9 @@ struct PICInfo : public BasePolyIC {
 
     // Return a JITCode block corresponding to the code memory to attach a
     // new stub to.
-    JITCode lastCodeBlock(JITScript *jit) {
+    JITCode lastCodeBlock(JITChunk *chunk) {
         if (!stubsGenerated)
-            return JITCode(jit->code.m_code.executableAddress(), jit->code.m_size);
+            return JITCode(chunk->code.m_code.executableAddress(), chunk->code.m_size);
         return lastStubStart;
     }
 
@@ -447,14 +400,20 @@ struct PICInfo : public BasePolyIC {
     RegisterID shapeReg : 5;        // also the out type reg
     RegisterID objReg   : 5;        // also the out data reg
 
+    // Whether type properties need to be updated to reflect generated stubs.
+    bool typeMonitored : 1;
+
+    // For GET caches, whether the access may use the property cache.
+    bool cached : 1;
+
     // Offset from start of fast path to initial shape guard.
-    uint32 shapeGuard;
-    
+    uint32_t shapeGuard;
+
     inline bool isSet() const {
-        return kind == SET || kind == SETMETHOD;
+        return kind == SET;
     }
     inline bool isGet() const {
-        return kind == GET || kind == CALL;
+        return kind == GET;
     }
     inline bool isBind() const {
         return kind == BIND;
@@ -473,17 +432,7 @@ struct PICInfo : public BasePolyIC {
     inline bool shapeNeedsRemat() {
         return !shapeRegHasBaseShape;
     }
-    inline bool isFastCall() {
-        JS_ASSERT(kind == CALL);
-        return !hasTypeCheck();
-    }
 
-#if !defined JS_HAS_IC_LABELS
-    static GetPropLabels getPropLabels_;
-    static SetPropLabels setPropLabels_;
-    static BindNameLabels bindNameLabels_;
-    static ScopeNameLabels scopeNameLabels_;
-#else
     union {
         GetPropLabels getPropLabels_;
         SetPropLabels setPropLabels_;
@@ -506,7 +455,6 @@ struct PICInfo : public BasePolyIC {
         JS_ASSERT(kind == NAME || kind == XNAME);
         scopeNameLabels_ = labels;
     }
-#endif
 
     GetPropLabels &getPropLabels() {
         JS_ASSERT(isGet());
@@ -527,10 +475,14 @@ struct PICInfo : public BasePolyIC {
 
     // Where in the script did we generate this PIC?
     jsbytecode *pc;
-    
-    // Index into the script's atom table.
-    JSAtom *atom;
 
+    // Index into the script's atom table.
+    PropertyName *name;
+
+  public:
+    void purge(Repatcher &repatcher);
+
+  protected:
     // Reset the data members to the state of a fresh PIC before any patching
     // or stub generation was done.
     void reset() {
@@ -541,15 +493,12 @@ struct PICInfo : public BasePolyIC {
 };
 
 #ifdef JS_POLYIC
-void PurgePICs(JSContext *cx, JSScript *script);
 void JS_FASTCALL GetProp(VMFrame &f, ic::PICInfo *);
-void JS_FASTCALL SetProp(VMFrame &f, ic::PICInfo *);
-void JS_FASTCALL CallProp(VMFrame &f, ic::PICInfo *);
+void JS_FASTCALL SetPropOrName(VMFrame &f, ic::PICInfo *);
 void JS_FASTCALL Name(VMFrame &f, ic::PICInfo *);
 void JS_FASTCALL XName(VMFrame &f, ic::PICInfo *);
 void JS_FASTCALL BindName(VMFrame &f, ic::PICInfo *);
 void JS_FASTCALL GetElement(VMFrame &f, ic::GetElementIC *);
-void JS_FASTCALL CallElement(VMFrame &f, ic::GetElementIC *);
 template <JSBool strict> void JS_FASTCALL SetElement(VMFrame &f, ic::SetElementIC *);
 #endif
 

@@ -1,344 +1,24 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
- *
- * ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is SpiderMonkey code.
- *
- * The Initial Developer of the Original Code is
- * Mozilla Corporation.
- * Portions created by the Initial Developer are Copyright (C) 2010
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either of the GNU General Public License Version 2 or later (the "GPL"),
- * or the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jscompartment_h___
 #define jscompartment_h___
 
+#include "mozilla/Attributes.h"
+
 #include "jscntxt.h"
-#include "jsgc.h"
-#include "jsmath.h"
-#include "jsobj.h"
 #include "jsfun.h"
-#include "jsgcstats.h"
-#include "jsclist.h"
-#include "jsxml.h"
+#include "jsgc.h"
+#include "jsobj.h"
+#include "jsscope.h"
 
-#ifdef _MSC_VER
-#pragma warning(push)
-#pragma warning(disable:4251) /* Silence warning about JS_FRIEND_API and data members. */
-#endif
-
-namespace JSC {
-
-class ExecutableAllocator;
-
-}
+#include "gc/StoreBuffer.h"
+#include "vm/GlobalObject.h"
+#include "vm/RegExpObject.h"
 
 namespace js {
-
-/* Holds the number of recording attemps for an address. */
-typedef HashMap<jsbytecode*,
-                size_t,
-                DefaultHasher<jsbytecode*>,
-                SystemAllocPolicy> RecordAttemptMap;
-
-/* Holds the profile data for loops. */
-typedef HashMap<jsbytecode*,
-                LoopProfile*,
-                DefaultHasher<jsbytecode*>,
-                SystemAllocPolicy> LoopProfileMap;
-
-class Oracle;
-
-typedef HashSet<JSScript *,
-                DefaultHasher<JSScript *>,
-                SystemAllocPolicy> TracedScriptSet;
-
-typedef HashMap<JSFunction *,
-                JSString *,
-                DefaultHasher<JSFunction *>,
-                SystemAllocPolicy> ToSourceCache;
-
-struct TraceMonitor;
-
-/* Holds the execution state during trace execution. */
-struct TracerState
-{
-    JSContext*     cx;                  // current VM context handle
-    TraceMonitor*  traceMonitor;        // current TM
-    double*        stackBase;           // native stack base
-    double*        sp;                  // native stack pointer, stack[0] is spbase[0]
-    double*        eos;                 // first unusable word after the native stack / begin of globals
-    FrameInfo**    callstackBase;       // call stack base
-    void*          sor;                 // start of rp stack
-    FrameInfo**    rp;                  // call stack pointer
-    void*          eor;                 // first unusable word after the call stack
-    VMSideExit*    lastTreeExitGuard;   // guard we exited on during a tree call
-    VMSideExit*    lastTreeCallGuard;   // guard we want to grow from if the tree
-                                        // call exit guard mismatched
-    void*          rpAtLastTreeCall;    // value of rp at innermost tree call guard
-    VMSideExit*    outermostTreeExitGuard; // the last side exit returned by js_CallTree
-    TreeFragment*  outermostTree;       // the outermost tree we initially invoked
-    uintN*         inlineCallCountp;    // inline call count counter
-    VMSideExit**   innermostNestedGuardp;
-    VMSideExit*    innermost;
-    uint64         startTime;
-    TracerState*   prev;
-
-    // Used by _FAIL builtins; see jsbuiltins.h. The builtin sets the
-    // JSBUILTIN_BAILED bit if it bails off trace and the JSBUILTIN_ERROR bit
-    // if an error or exception occurred.
-    uint32         builtinStatus;
-
-    // Used to communicate the location of the return value in case of a deep bail.
-    double*        deepBailSp;
-
-    // Used when calling natives from trace to root the vp vector.
-    uintN          nativeVpLen;
-    js::Value*     nativeVp;
-
-    TracerState(JSContext *cx, TraceMonitor *tm, TreeFragment *ti,
-                uintN &inlineCallCountp, VMSideExit** innermostNestedGuardp);
-    ~TracerState();
-};
-
-/*
- * Storage for the execution state and store during trace execution. Generated
- * code depends on the fact that the globals begin |MAX_NATIVE_STACK_SLOTS|
- * doubles after the stack begins. Thus, on trace, |TracerState::eos| holds a
- * pointer to the first global.
- */
-struct TraceNativeStorage
-{
-    double stack_global_buf[MAX_NATIVE_STACK_SLOTS + GLOBAL_SLOTS_BUFFER_SIZE];
-    FrameInfo *callstack_buf[MAX_CALL_STACK_ENTRIES];
-
-    double *stack() { return stack_global_buf; }
-    double *global() { return stack_global_buf + MAX_NATIVE_STACK_SLOTS; }
-    FrameInfo **callstack() { return callstack_buf; }
-};
-
-/* Holds data to track a single globa. */
-struct GlobalState {
-    JSObject*               globalObj;
-    uint32                  globalShape;
-    SlotList*               globalSlots;
-};
-
-/*
- * Trace monitor. Every JSCompartment has an associated trace monitor
- * that keeps track of loop frequencies for all JavaScript code loaded
- * into that runtime.
- */
-struct TraceMonitor {
-    /*
-     * The context currently executing JIT-compiled code in this compartment, or
-     * NULL if none. Among other things, this can in certain cases prevent
-     * last-ditch GC and suppress calls to JS_ReportOutOfMemory.
-     *
-     * !tracecx && !recorder: not on trace
-     * !tracecx && recorder: recording
-     * tracecx && !recorder: executing a trace
-     * tracecx && recorder: executing inner loop, recording outer loop
-     */
-    JSContext               *tracecx;
-
-    /*
-     * State for the current tree execution.  bailExit is valid if the tree has
-     * called back into native code via a _FAIL builtin and has not yet bailed,
-     * else garbage (NULL in debug builds).
-     */
-    js::TracerState     *tracerState;
-    js::VMSideExit      *bailExit;
-
-    /* Counts the number of iterations run by the currently executing trace. */
-    unsigned                iterationCounter;
-
-    /*
-     * Cached storage to use when executing on trace. While we may enter nested
-     * traces, we always reuse the outer trace's storage, so never need more
-     * than of these.
-     */
-    TraceNativeStorage      *storage;
-
-    /*
-     * There are 4 allocators here.  This might seem like overkill, but they
-     * have different lifecycles, and by keeping them separate we keep the
-     * amount of retained memory down significantly.  They are flushed (ie.
-     * all the allocated memory is freed) periodically.
-     *
-     * - dataAlloc has the lifecycle of the monitor.  It's flushed only when
-     *   the monitor is flushed.  It's used for fragments.
-     *
-     * - traceAlloc has the same flush lifecycle as the dataAlloc, but it is
-     *   also *marked* when a recording starts and rewinds to the mark point
-     *   if recording aborts.  So you can put things in it that are only
-     *   reachable on a successful record/compile cycle like GuardRecords and
-     *   SideExits.
-     *
-     * - tempAlloc is flushed after each recording, successful or not.  It's
-     *   used to store LIR code and for all other elements in the LIR
-     *   pipeline.
-     *
-     * - codeAlloc has the same lifetime as dataAlloc, but its API is
-     *   different (CodeAlloc vs. VMAllocator).  It's used for native code.
-     *   It's also a good idea to keep code and data separate to avoid I-cache
-     *   vs. D-cache issues.
-     */
-    VMAllocator*            dataAlloc;
-    VMAllocator*            traceAlloc;
-    VMAllocator*            tempAlloc;
-    nanojit::CodeAlloc*     codeAlloc;
-    nanojit::Assembler*     assembler;
-    FrameInfoCache*         frameCache;
-
-    /* This gets incremented every time the monitor is flushed. */
-    uintN                   flushEpoch;
-
-    Oracle*                 oracle;
-    TraceRecorder*          recorder;
-
-    /* If we are profiling a loop, this tracks the current profile. Otherwise NULL. */
-    LoopProfile*            profile;
-
-    GlobalState             globalStates[MONITOR_N_GLOBAL_STATES];
-    TreeFragment            *vmfragments[FRAGMENT_TABLE_SIZE];
-    RecordAttemptMap*       recordAttempts;
-
-    /* A hashtable mapping PC values to loop profiles for those loops. */
-    LoopProfileMap*         loopProfiles;
-
-    /*
-     * Maximum size of the code cache before we start flushing. 1/16 of this
-     * size is used as threshold for the regular expression code cache.
-     */
-    uint32                  maxCodeCacheBytes;
-
-    /*
-     * If nonzero, do not flush the JIT cache after a deep bail. That would
-     * free JITted code pages that we will later return to. Instead, set the
-     * needFlush flag so that it can be flushed later.
-     */
-    JSBool                  needFlush;
-
-    // Cached temporary typemap to avoid realloc'ing every time we create one.
-    // This must be used in only one place at a given time. It must be cleared
-    // before use.
-    TypeMap*                cachedTempTypeMap;
-
-    /* Scripts with recorded fragments. */
-    TracedScriptSet         tracedScripts;
-
-#ifdef DEBUG
-    /* Fields needed for fragment/guard profiling. */
-    nanojit::Seq<nanojit::Fragment*>* branches;
-    uint32                  lastFragID;
-    /*
-     * profAlloc has a lifetime which spans exactly from InitJIT to
-     * FinishJIT.
-     */
-    VMAllocator*            profAlloc;
-    FragStatsMap*           profTab;
-#endif
-
-    bool ontrace() const {
-        return !!tracecx;
-    }
-
-    /* Flush the JIT cache. */
-    void flush();
-
-    /* Sweep any cache entry pointing to dead GC things. */
-    void sweep(JSContext *cx);
-
-    /* Mark any tracer stacks that are active. */
-    void mark(JSTracer *trc);
-
-    bool outOfMemory() const;
-};
-
-namespace mjit {
-class JaegerCompartment;
-}
-}
-
-/* Number of potentially reusable scriptsToGC to search for the eval cache. */
-#ifndef JS_EVAL_CACHE_SHIFT
-# define JS_EVAL_CACHE_SHIFT        6
-#endif
-#define JS_EVAL_CACHE_SIZE          JS_BIT(JS_EVAL_CACHE_SHIFT)
-
-#ifdef DEBUG
-# define EVAL_CACHE_METER_LIST(_)   _(probe), _(hit), _(step), _(noscope)
-# define identity(x)                x
-
-struct JSEvalCacheMeter {
-    uint64 EVAL_CACHE_METER_LIST(identity);
-};
-
-# undef identity
-#endif
-
-namespace js {
-
-class NativeIterCache {
-    static const size_t SIZE = size_t(1) << 8;
-    
-    /* Cached native iterators. */
-    JSObject            *data[SIZE];
-
-    static size_t getIndex(uint32 key) {
-        return size_t(key) % SIZE;
-    }
-
-  public:
-    /* Native iterator most recently started. */
-    JSObject            *last;
-
-    NativeIterCache()
-      : last(NULL) {
-        PodArrayZero(data);
-    }
-
-    void purge() {
-        PodArrayZero(data);
-        last = NULL;
-    }
-
-    JSObject *get(uint32 key) const {
-        return data[getIndex(key)];
-    }
-
-    void set(uint32 key, JSObject *iterobj) {
-        data[getIndex(key)] = iterobj;
-    }
-};
 
 /*
  * A single-entry cache for some base-10 double-to-string conversions. This
@@ -348,18 +28,18 @@ class NativeIterCache {
  * is erroneously included in the measurement; see bug 562553.
  */
 class DtoaCache {
-    double   d;
-    jsint    base;
-    JSString *s;        // if s==NULL, d and base are not valid
+    double        d;
+    int         base;
+    JSFixedString *s;      // if s==NULL, d and base are not valid
   public:
     DtoaCache() : s(NULL) {}
     void purge() { s = NULL; }
 
-    JSString *lookup(jsint base, double d) {
+    JSFixedString *lookup(int base, double d) {
         return this->s && base == this->base && d == this->d ? this->s : NULL;
     }
 
-    void cache(jsint base, double d, JSString *s) {
+    void cache(int base, double d, JSFixedString *s) {
         this->base = base;
         this->d = d;
         this->s = s;
@@ -367,96 +47,291 @@ class DtoaCache {
 
 };
 
+/* If HashNumber grows, need to change WrapperHasher. */
+JS_STATIC_ASSERT(sizeof(HashNumber) == 4);
+
+struct CrossCompartmentKey
+{
+    enum Kind {
+        ObjectWrapper,
+        StringWrapper,
+        DebuggerScript,
+        DebuggerObject,
+        DebuggerEnvironment
+    };
+
+    Kind kind;
+    JSObject *debugger;
+    js::gc::Cell *wrapped;
+
+    CrossCompartmentKey()
+      : kind(ObjectWrapper), debugger(NULL), wrapped(NULL) {}
+    CrossCompartmentKey(JSObject *wrapped)
+      : kind(ObjectWrapper), debugger(NULL), wrapped(wrapped) {}
+    CrossCompartmentKey(JSString *wrapped)
+      : kind(StringWrapper), debugger(NULL), wrapped(wrapped) {}
+    CrossCompartmentKey(Value wrapped)
+      : kind(wrapped.isString() ? StringWrapper : ObjectWrapper),
+        debugger(NULL),
+        wrapped((js::gc::Cell *)wrapped.toGCThing()) {}
+    CrossCompartmentKey(const RootedValue &wrapped)
+      : kind(wrapped.get().isString() ? StringWrapper : ObjectWrapper),
+        debugger(NULL),
+        wrapped((js::gc::Cell *)wrapped.get().toGCThing()) {}
+    CrossCompartmentKey(Kind kind, JSObject *dbg, js::gc::Cell *wrapped)
+      : kind(kind), debugger(dbg), wrapped(wrapped) {}
+};
+
+struct WrapperHasher
+{
+    typedef CrossCompartmentKey Lookup;
+
+    static HashNumber hash(const CrossCompartmentKey &key) {
+        JS_ASSERT(!IsPoisonedPtr(key.wrapped));
+        return uint32_t(uintptr_t(key.wrapped)) | uint32_t(key.kind);
+    }
+
+    static bool match(const CrossCompartmentKey &l, const CrossCompartmentKey &k) {
+        return l.kind == k.kind && l.debugger == k.debugger && l.wrapped == k.wrapped;
+    }
+};
+
+typedef HashMap<CrossCompartmentKey, ReadBarrieredValue,
+                WrapperHasher, SystemAllocPolicy> WrapperMap;
+
 } /* namespace js */
 
-struct JS_FRIEND_API(JSCompartment) {
+namespace JS {
+struct TypeInferenceSizes;
+}
+
+namespace js {
+class AutoDebugModeGC;
+}
+
+struct JSCompartment
+{
     JSRuntime                    *rt;
     JSPrincipals                 *principals;
-    js::gc::Chunk                *chunk;
 
-    js::gc::ArenaList            arenas[js::gc::FINALIZE_LIMIT];
-    js::gc::FreeLists            freeLists;
+  private:
+    friend struct JSContext;
+    js::GlobalObject             *global_;
+  public:
+    // Nb: global_ might be NULL, if (a) it's the atoms compartment, or (b) the
+    // compartment's global has been collected.  The latter can happen if e.g.
+    // a string in a compartment is rooted but no object is, and thus the
+    // global isn't rooted, and thus the global can be finalized while the
+    // compartment lives on.
+    //
+    // In contrast, JSObject::global() is infallible because marking a JSObject
+    // always marks its global as well.
+    // TODO: add infallible JSScript::global()
+    //
+    js::GlobalObject *maybeGlobal() const {
+        JS_ASSERT_IF(global_, global_->compartment() == this);
+        return global_;
+    }
+
+    void initGlobal(js::GlobalObject &global) {
+        JS_ASSERT(global.compartment() == this);
+        JS_ASSERT(!global_);
+        global_ = &global;
+    }
+
+  public:
+    js::gc::ArenaLists           arenas;
+
+#ifdef JSGC_GENERATIONAL
+    js::gc::Nursery              gcNursery;
+    js::gc::StoreBuffer          gcStoreBuffer;
+#endif
+
+  private:
+    bool                         needsBarrier_;
+  public:
+
+    bool needsBarrier() const {
+        return needsBarrier_;
+    }
+
+    bool compileBarriers(bool needsBarrier) const {
+        return needsBarrier || rt->gcZeal() == js::gc::ZealVerifierPreValue;
+    }
+
+    bool compileBarriers() const {
+        return compileBarriers(needsBarrier());
+    }
+
+    void setNeedsBarrier(bool needs);
+
+    js::GCMarker *barrierTracer() {
+        JS_ASSERT(needsBarrier_);
+        return &rt->gcMarker;
+    }
+
+  public:
+    enum CompartmentGCState {
+        NoGC,
+        Mark,
+        Sweep
+    };
+
+  private:
+    bool                         gcScheduled;
+    CompartmentGCState           gcState;
+    bool                         gcPreserveCode;
+
+  public:
+    bool isCollecting() const {
+        if (rt->isHeapCollecting()) {
+            return gcState != NoGC;
+        } else {
+            return needsBarrier();
+        }
+    }
+
+    bool isPreservingCode() const {
+        return gcPreserveCode;
+    }
+
+    /*
+     * If this returns true, all object tracing must be done with a GC marking
+     * tracer.
+     */
+    bool requireGCTracer() const {
+        return rt->isHeapCollecting() && gcState != NoGC;
+    }
+
+    void setGCState(CompartmentGCState state) {
+        JS_ASSERT(rt->isHeapBusy());
+        gcState = state;
+    }
+
+    void scheduleGC() {
+        JS_ASSERT(!rt->isHeapBusy());
+        gcScheduled = true;
+    }
+
+    void unscheduleGC() {
+        gcScheduled = false;
+    }
+
+    bool isGCScheduled() const {
+        return gcScheduled;
+    }
+
+    void setPreservingCode(bool preserving) {
+        gcPreserveCode = preserving;
+    }
+
+    bool wasGCStarted() const {
+        return gcState != NoGC;
+    }
+
+    bool isGCMarking() {
+        return gcState == Mark;
+    }
+
+    bool isGCSweeping() {
+        return gcState == Sweep;
+    }
 
     size_t                       gcBytes;
     size_t                       gcTriggerBytes;
-    size_t                       gcLastBytes;
+    size_t                       gcMaxMallocBytes;
+    double                       gcHeapGrowthFactor;
+    JSCompartment                *gcNextCompartment;
 
-#ifdef JS_GCMETER
-    js::gc::JSGCArenaStats       compartmentStats[js::gc::FINALIZE_LIMIT];
-#endif
+    bool                         hold;
+    bool                         isSystemCompartment;
 
-#ifdef JS_TRACER
-    /* Trace-tree JIT recorder/interpreter state. */
-    js::TraceMonitor             traceMonitor;
-#endif
+    int64_t                      lastCodeRelease;
 
-    /* Hashed lists of scripts created by eval to garbage-collect. */
-    JSScript                     *scriptsToGC[JS_EVAL_CACHE_SIZE];
+    /* Pools for analysis and type information in this compartment. */
+    static const size_t LIFO_ALLOC_PRIMARY_CHUNK_SIZE = 128 * 1024;
+    js::LifoAlloc                analysisLifoAlloc;
+    js::LifoAlloc                typeLifoAlloc;
 
-#ifdef DEBUG
-    JSEvalCacheMeter             evalCacheMeter;
-#endif
+    bool                         activeAnalysis;
+    bool                         activeInference;
+
+    /* Type information about the scripts and objects in this compartment. */
+    js::types::TypeCompartment   types;
 
     void                         *data;
     bool                         active;  // GC flag, whether there are active frames
     js::WrapperMap               crossCompartmentWrappers;
 
-#ifdef JS_METHODJIT
-    js::mjit::JaegerCompartment  *jaegerCompartment;
-#endif
+    /* Last time at which an animation was played for a global in this compartment. */
+    int64_t                      lastAnimationTime;
+
+    js::RegExpCompartment        regExps;
+
+    size_t sizeOfShapeTable(JSMallocSizeOfFun mallocSizeOf);
+    void sizeOfTypeInferenceData(JS::TypeInferenceSizes *stats, JSMallocSizeOfFun mallocSizeOf);
 
     /*
      * Shared scope property tree, and arena-pool for allocating its nodes.
      */
     js::PropertyTree             propertyTree;
 
-#ifdef DEBUG
-    /* Property metering. */
-    jsrefcount                   livePropTreeNodes;
-    jsrefcount                   totalPropTreeNodes;
-    jsrefcount                   propTreeKidsChunks;
-    jsrefcount                   liveDictModeNodes;
-#endif
+    /* Set of all unowned base shapes in the compartment. */
+    js::BaseShapeSet             baseShapes;
+    void sweepBaseShapeTable();
+
+    /* Set of initial shapes in the compartment. */
+    js::InitialShapeSet          initialShapes;
+    void sweepInitialShapeTable();
+
+    /* Set of default 'new' or lazy types in the compartment. */
+    js::types::TypeObjectSet     newTypeObjects;
+    js::types::TypeObjectSet     lazyTypeObjects;
+    void sweepNewTypeObjectTable(js::types::TypeObjectSet &table);
+
+    js::ReadBarriered<js::types::TypeObject> emptyTypeObject;
+
+    /* Get the default 'new' type for objects with a NULL prototype. */
+    inline js::types::TypeObject *getEmptyType(JSContext *cx);
+
+    js::types::TypeObject *getLazyType(JSContext *cx, JSObject *proto);
 
     /*
-     * Runtime-shared empty scopes for well-known built-in objects that lack
-     * class prototypes (the usual locus of an emptyShape). Mnemonic: ABCDEW
+     * Keeps track of the total number of malloc bytes connected to a
+     * compartment's GC things. This counter should be used in preference to
+     * gcMallocBytes. These counters affect collection in the same way as
+     * gcBytes and gcTriggerBytes.
      */
-    js::EmptyShape               *emptyArgumentsShape;
-    js::EmptyShape               *emptyBlockShape;
-    js::EmptyShape               *emptyCallShape;
-    js::EmptyShape               *emptyDeclEnvShape;
-    js::EmptyShape               *emptyEnumeratorShape;
-    js::EmptyShape               *emptyWithShape;
+    size_t                       gcMallocAndFreeBytes;
+    size_t                       gcTriggerMallocAndFreeBytes;
 
-    typedef js::HashSet<js::EmptyShape *,
-                        js::DefaultHasher<js::EmptyShape *>,
-                        js::SystemAllocPolicy> EmptyShapeSet;
+    /* During GC, stores the index of this compartment in rt->compartments. */
+    unsigned                     index;
 
-    EmptyShapeSet                emptyShapes;
+  private:
+    /*
+     * Malloc counter to measure memory pressure for GC scheduling. It runs from
+     * gcMaxMallocBytes down to zero. This counter should be used only when it's
+     * not possible to know the size of a free.
+     */
+    ptrdiff_t                    gcMallocBytes;
 
-    bool                         debugMode;  // true iff debug mode on
-    JSCList                      scripts;    // scripts in this compartment
+    enum { DebugFromC = 1, DebugFromJS = 2 };
 
-    JSC::ExecutableAllocator     *regExpAllocator;
+    unsigned                     debugModeBits;  // see debugMode() below
 
-    js::NativeIterCache          nativeIterCache;
-
-    js::ToSourceCache            toSourceCache;
-
+  public:
     JSCompartment(JSRuntime *rt);
     ~JSCompartment();
 
-    bool init();
+    bool init(JSContext *cx);
 
     /* Mark cross-compartment wrappers. */
-    void markCrossCompartment(JSTracer *trc);
-
-    /* Mark this compartment's local roots. */
-    void mark(JSTracer *trc);
+    void markCrossCompartmentWrappers(JSTracer *trc);
 
     bool wrap(JSContext *cx, js::Value *vp);
     bool wrap(JSContext *cx, JSString **strp);
+    bool wrap(JSContext *cx, js::HeapPtrString *strp);
     bool wrap(JSContext *cx, JSObject **objp);
     bool wrapId(JSContext *cx, jsid *idp);
     bool wrap(JSContext *cx, js::PropertyOp *op);
@@ -464,155 +339,131 @@ struct JS_FRIEND_API(JSCompartment) {
     bool wrap(JSContext *cx, js::PropertyDescriptor *desc);
     bool wrap(JSContext *cx, js::AutoIdVector &props);
 
-    void sweep(JSContext *cx, uint32 releaseInterval);
-    void purge(JSContext *cx);
-    void finishArenaLists();
-    void finalizeObjectArenaLists(JSContext *cx);
-    void finalizeStringArenaLists(JSContext *cx);
-    bool arenaListsAreEmpty();
+    void markTypes(JSTracer *trc);
+    void discardJitCode(js::FreeOp *fop, bool discardConstraints);
+    bool isDiscardingJitCode(JSTracer *trc);
+    void sweep(js::FreeOp *fop, bool releaseTypes);
+    void sweepCrossCompartmentWrappers();
+    void purge();
 
-    void setGCLastBytes(size_t lastBytes);
+    void setGCLastBytes(size_t lastBytes, size_t lastMallocBytes, js::JSGCInvocationKind gckind);
+    void reduceGCTriggerBytes(size_t amount);
+
+    void resetGCMallocBytes();
+    void setGCMaxMallocBytes(size_t value);
+    void updateMallocCounter(size_t nbytes) {
+        ptrdiff_t oldCount = gcMallocBytes;
+        ptrdiff_t newCount = oldCount - ptrdiff_t(nbytes);
+        gcMallocBytes = newCount;
+        if (JS_UNLIKELY(newCount <= 0 && oldCount > 0))
+            onTooMuchMalloc();
+    }
+
+    bool isTooMuchMalloc() const {
+        return gcMallocBytes <= 0;
+     }
+
+    void onTooMuchMalloc();
+
+    void mallocInCompartment(size_t nbytes) {
+        gcMallocAndFreeBytes += nbytes;
+    }
+
+    void freeInCompartment(size_t nbytes) {
+        JS_ASSERT(gcMallocAndFreeBytes >= nbytes);
+        gcMallocAndFreeBytes -= nbytes;
+    }
 
     js::DtoaCache dtoaCache;
 
   private:
-    js::MathCache                *mathCache;
+    /*
+     * Weak reference to each global in this compartment that is a debuggee.
+     * Each global has its own list of debuggers.
+     */
+    js::GlobalObjectSet              debuggees;
 
-    js::MathCache *allocMathCache(JSContext *cx);
-
-    bool                         marked;
-    
-    typedef js::HashMap<jsbytecode*,
-                        size_t,
-                        js::DefaultHasher<jsbytecode*>,
-                        js::SystemAllocPolicy> BackEdgeMap;
-
-    BackEdgeMap                  backEdgeTable;
-
-    JSCompartment *thisForCtor() { return this; }
-  public:
-    js::MathCache *getMathCache(JSContext *cx) {
-        return mathCache ? mathCache : allocMathCache(cx);
-    }
-
-    bool isMarked() { return marked; }
-    void clearMark() { marked = false; }
-
-    size_t backEdgeCount(jsbytecode *pc) const;
-    size_t incBackEdgeCount(jsbytecode *pc);
-};
-
-#define JS_SCRIPTS_TO_GC(cx)    ((cx)->compartment->scriptsToGC)
-#define JS_PROPERTY_TREE(cx)    ((cx)->compartment->propertyTree)
-
-#ifdef DEBUG
-#define JS_COMPARTMENT_METER(x) x
-#else
-#define JS_COMPARTMENT_METER(x)
-#endif
-
-/*
- * N.B. JS_ON_TRACE(cx) is true if JIT code is on the stack in the current
- * thread, regardless of whether cx is the context in which that trace is
- * executing. cx must be a context on the current thread.
- */
-static inline bool
-JS_ON_TRACE(JSContext *cx)
-{
-#ifdef JS_TRACER
-    if (JS_THREAD_DATA(cx)->onTraceCompartment)
-        return JS_THREAD_DATA(cx)->onTraceCompartment->traceMonitor.ontrace();
-#endif
-    return false;
-}
-
-#ifdef JS_TRACER
-static inline js::TraceMonitor *
-JS_TRACE_MONITOR_ON_TRACE(JSContext *cx)
-{
-    JS_ASSERT(JS_ON_TRACE(cx));
-    return &JS_THREAD_DATA(cx)->onTraceCompartment->traceMonitor;
-}
-
-/*
- * Only call this directly from the interpreter loop or the method jit.
- * Otherwise, we may get the wrong compartment, and thus the wrong
- * TraceMonitor.
- */
-static inline js::TraceMonitor *
-JS_TRACE_MONITOR_FROM_CONTEXT(JSContext *cx)
-{
-    return &cx->compartment->traceMonitor;
-}
-#endif
-
-static inline js::TraceRecorder *
-TRACE_RECORDER(JSContext *cx)
-{
-#ifdef JS_TRACER
-    if (JS_THREAD_DATA(cx)->recordingCompartment)
-        return JS_THREAD_DATA(cx)->recordingCompartment->traceMonitor.recorder;
-#endif
-    return NULL;
-}
-
-static inline js::LoopProfile *
-TRACE_PROFILER(JSContext *cx)
-{
-#ifdef JS_TRACER
-    if (JS_THREAD_DATA(cx)->profilingCompartment)
-        return JS_THREAD_DATA(cx)->profilingCompartment->traceMonitor.profile;
-#endif
-    return NULL;
-}
-
-namespace js {
-static inline MathCache *
-GetMathCache(JSContext *cx)
-{
-    return cx->compartment->getMathCache(cx);
-}
-}
-
-#ifdef DEBUG
-# define EVAL_CACHE_METER(x)    (cx->compartment->evalCacheMeter.x++)
-#else
-# define EVAL_CACHE_METER(x)    ((void) 0)
-#endif
-
-#ifdef _MSC_VER
-#pragma warning(pop)
-#endif
-
-namespace js {
-
-class PreserveCompartment {
-  protected:
-    JSContext *cx;
   private:
-    JSCompartment *oldCompartment;
-    JS_DECL_USE_GUARD_OBJECT_NOTIFIER
+    JSCompartment *thisForCtor() { return this; }
+
   public:
-     PreserveCompartment(JSContext *cx JS_GUARD_OBJECT_NOTIFIER_PARAM) : cx(cx) {
-        JS_GUARD_OBJECT_NOTIFIER_INIT;
-        oldCompartment = cx->compartment;
+    /*
+     * There are dueling APIs for debug mode. It can be enabled or disabled via
+     * JS_SetDebugModeForCompartment. It is automatically enabled and disabled
+     * by Debugger objects. Therefore debugModeBits has the DebugFromC bit set
+     * if the C API wants debug mode and the DebugFromJS bit set if debuggees
+     * is non-empty.
+     */
+    bool debugMode() const { return !!debugModeBits; }
+
+    /* True if any scripts from this compartment are on the JS stack. */
+    bool hasScriptsOnStack();
+
+  private:
+    /* This is called only when debugMode() has just toggled. */
+    void updateForDebugMode(js::FreeOp *fop, js::AutoDebugModeGC &dmgc);
+
+  public:
+    js::GlobalObjectSet &getDebuggees() { return debuggees; }
+    bool addDebuggee(JSContext *cx, js::GlobalObject *global);
+    void removeDebuggee(js::FreeOp *fop, js::GlobalObject *global,
+                        js::GlobalObjectSet::Enum *debuggeesEnum = NULL);
+    bool setDebugModeFromC(JSContext *cx, bool b, js::AutoDebugModeGC &dmgc);
+
+    void clearBreakpointsIn(js::FreeOp *fop, js::Debugger *dbg, JSObject *handler);
+    void clearTraps(js::FreeOp *fop);
+
+  private:
+    void sweepBreakpoints(js::FreeOp *fop);
+
+  public:
+    js::WatchpointMap *watchpointMap;
+
+    js::ScriptCountsMap *scriptCountsMap;
+
+    js::DebugScriptMap *debugScriptMap;
+};
+
+// For use when changing the debug mode flag on one or more compartments.
+// Do not run scripts in any compartment that is scheduled for GC using this
+// object. See comment in updateForDebugMode.
+//
+class js::AutoDebugModeGC
+{
+    JSRuntime *rt;
+    bool needGC;
+  public:
+    explicit AutoDebugModeGC(JSRuntime *rt) : rt(rt), needGC(false) {}
+
+    ~AutoDebugModeGC() {
+        // Under some circumstances (say, in the midst of an animation),
+        // the garbage collector may try to retain JIT code and analyses.
+        // The DEBUG_MODE_GC reason forces the collector to always throw
+        // everything away, as required for debug mode transitions.
+        if (needGC)
+            GC(rt, GC_NORMAL, gcreason::DEBUG_MODE_GC);
     }
 
-    ~PreserveCompartment() {
-        cx->compartment = oldCompartment;
+    void scheduleGC(JSCompartment *compartment) {
+        JS_ASSERT(!rt->isHeapBusy());
+        PrepareCompartmentForGC(compartment);
+        needGC = true;
     }
 };
 
-class SwitchToCompartment : public PreserveCompartment {
-  public:
-    SwitchToCompartment(JSContext *cx, JSCompartment *newCompartment) : PreserveCompartment(cx) {
-        cx->compartment = newCompartment;
-    }
+inline bool
+JSContext::typeInferenceEnabled() const
+{
+    return compartment->types.inferenceEnabled;
+}
 
-    SwitchToCompartment(JSContext *cx, JSObject *target) : PreserveCompartment(cx) {
-        cx->compartment = target->getCompartment();
-    }
-};
+inline js::Handle<js::GlobalObject*>
+JSContext::global() const
+{
+    return js::Handle<js::GlobalObject*>::fromMarkedLocation(&compartment->global_);
+}
+
+namespace js {
 
 class AssertCompartmentUnchanged {
   protected:
@@ -630,6 +481,99 @@ class AssertCompartmentUnchanged {
     }
 };
 
-}
+class AutoCompartment
+{
+    JSContext * const cx_;
+    JSCompartment * const origin_;
+
+  public:
+    AutoCompartment(JSContext *cx, JSObject *target)
+      : cx_(cx),
+        origin_(cx->compartment)
+    {
+        cx_->enterCompartment(target->compartment());
+    }
+
+    ~AutoCompartment() {
+        cx_->leaveCompartment(origin_);
+    }
+
+    JSContext *context() const { return cx_; }
+    JSCompartment *origin() const { return origin_; }
+
+  private:
+    AutoCompartment(const AutoCompartment &) MOZ_DELETE;
+    AutoCompartment & operator=(const AutoCompartment &) MOZ_DELETE;
+};
+
+/*
+ * Entering the atoms comaprtment is not possible with the AutoCompartment
+ * since the atoms compartment does not have a global.
+ *
+ * Note: since most of the VM assumes that cx->global is non-null, only a
+ * restricted set of (atom creating/destroying) operations may be used from
+ * inside the atoms compartment.
+ */
+class AutoEnterAtomsCompartment
+{
+    JSContext *cx;
+    JSCompartment *oldCompartment;
+  public:
+    AutoEnterAtomsCompartment(JSContext *cx)
+      : cx(cx),
+        oldCompartment(cx->compartment)
+    {
+        cx->setCompartment(cx->runtime->atomsCompartment);
+    }
+
+    ~AutoEnterAtomsCompartment()
+    {
+        cx->setCompartment(oldCompartment);
+    }
+};
+
+/*
+ * Use this to change the behavior of an AutoCompartment slightly on error. If
+ * the exception happens to be an Error object, copy it to the origin compartment
+ * instead of wrapping it.
+ */
+class ErrorCopier
+{
+    Maybe<AutoCompartment> &ac;
+    RootedObject scope;
+
+  public:
+    ErrorCopier(Maybe<AutoCompartment> &ac, JSObject *scope)
+      : ac(ac), scope(ac.ref().context(), scope) {}
+    ~ErrorCopier();
+};
+
+class CompartmentsIter {
+  private:
+    JSCompartment **it, **end;
+
+  public:
+    CompartmentsIter(JSRuntime *rt) {
+        it = rt->compartments.begin();
+        end = rt->compartments.end();
+    }
+
+    bool done() const { return it == end; }
+
+    void next() {
+        JS_ASSERT(!done());
+        it++;
+    }
+
+    JSCompartment *get() const {
+        JS_ASSERT(!done());
+        return *it;
+    }
+
+    operator JSCompartment *() const { return get(); }
+    JSCompartment *operator->() const { return get(); }
+};
+
+} /* namespace js */
 
 #endif /* jscompartment_h___ */

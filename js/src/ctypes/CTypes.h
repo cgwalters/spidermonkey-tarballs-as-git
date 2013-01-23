@@ -1,49 +1,17 @@
 /* -*-  Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2; -*- */
-/* ***** BEGIN LICENSE BLOCK *****
- * Version: MPL 1.1/GPL 2.0/LGPL 2.1
- *
- * The contents of this file are subject to the Mozilla Public License Version
- * 1.1 (the "License"); you may not use this file except in compliance with
- * the License. You may obtain a copy of the License at
- * http://www.mozilla.org/MPL/
- *
- * Software distributed under the License is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License
- * for the specific language governing rights and limitations under the
- * License.
- *
- * The Original Code is js-ctypes.
- *
- * The Initial Developer of the Original Code is
- * The Mozilla Foundation <http://www.mozilla.org/>.
- * Portions created by the Initial Developer are Copyright (C) 2009
- * the Initial Developer. All Rights Reserved.
- *
- * Contributor(s):
- *  Dan Witte <dwitte@mozilla.com>
- *
- * Alternatively, the contents of this file may be used under the terms of
- * either the GNU General Public License Version 2 or later (the "GPL"), or
- * the GNU Lesser General Public License Version 2.1 or later (the "LGPL"),
- * in which case the provisions of the GPL or the LGPL are applicable instead
- * of those above. If you wish to allow use of your version of this file only
- * under the terms of either the GPL or the LGPL, and not to allow others to
- * use your version of this file under the terms of the MPL, indicate your
- * decision by deleting the provisions above and replace them with the notice
- * and other provisions required by the GPL or the LGPL. If you do not delete
- * the provisions above, a recipient may use your version of this file under
- * the terms of any one of the MPL, the GPL or the LGPL.
- *
- * ***** END LICENSE BLOCK ***** */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef CTYPES_H
 #define CTYPES_H
 
 #include "jscntxt.h"
 #include "jsapi.h"
-#include "jshashtable.h"
 #include "prlink.h"
 #include "ffi.h"
+
+#include "js/HashTable.h"
 
 namespace js {
 namespace ctypes {
@@ -56,18 +24,18 @@ template<class T>
 class OperatorDelete
 {
 public:
-  static void destroy(T* ptr) { js_delete(ptr); }
+  static void destroy(T* ptr) { UnwantedForeground::delete_(ptr); }
 };
 
 template<class T>
 class OperatorArrayDelete
 {
 public:
-  static void destroy(T* ptr) { js_array_delete(ptr); }
+  static void destroy(T* ptr) { UnwantedForeground::array_delete(ptr); }
 };
 
-// Class that takes ownership of a pointer T*, and calls js_delete() or
-// js_array_delete() upon destruction.
+// Class that takes ownership of a pointer T*, and calls cx->delete_() or
+// cx->array_delete() upon destruction.
 template<class T, class DeleteTraits = OperatorDelete<T> >
 class AutoPtr {
 private:
@@ -224,7 +192,7 @@ enum ErrorNum {
 };
 
 const JSErrorFormatString*
-GetErrorMessage(void* userRef, const char* locale, const uintN errorNumber);
+GetErrorMessage(void* userRef, const char* locale, const unsigned errorNumber);
 JSBool TypeError(JSContext* cx, const char* expected, jsval actual);
 
 /**
@@ -266,10 +234,10 @@ struct FieldHashPolicy
   typedef JSFlatString* Key;
   typedef Key Lookup;
 
-  static uint32 hash(const Lookup &l) {
+  static uint32_t hash(const Lookup &l) {
     const jschar* s = l->chars();
     size_t n = l->length();
-    uint32 hash = 0;
+    uint32_t hash = 0;
     for (; n > 0; s++, n--)
       hash = hash * 33 + *s;
     return hash;
@@ -322,29 +290,44 @@ struct FunctionInfo
 struct ClosureInfo
 {
   JSContext* cx;         // JSContext to use
+  JSRuntime* rt;         // Used in the destructor, where cx might have already
+                         // been GCed.
   JSObject* closureObj;  // CClosure object
   JSObject* typeObj;     // FunctionType describing the C function
   JSObject* thisObj;     // 'this' object to use for the JS function call
   JSObject* jsfnObj;     // JS function
+  void* errResult;       // Result that will be returned if the closure throws
   ffi_closure* closure;  // The C closure itself
-#ifdef DEBUG
-  jsword cxThread;       // The thread on which the context may be used
-#endif
+
+  // Anything conditionally freed in the destructor should be initialized to
+  // NULL here.
+  ClosureInfo(JSRuntime* runtime)
+    : rt(runtime)
+    , errResult(NULL)
+    , closure(NULL)
+  {}
+
+  ~ClosureInfo() {
+    if (closure)
+      ffi_closure_free(closure);
+    if (errResult)
+      rt->free_(errResult);
+  };
 };
 
-bool IsCTypesGlobal(JSContext* cx, JSObject* obj);
+bool IsCTypesGlobal(JSObject* obj);
 
-JSCTypesCallbacks* GetCallbacks(JSContext* cx, JSObject* obj);
+JSCTypesCallbacks* GetCallbacks(JSObject* obj);
 
-JSBool InitTypeClasses(JSContext* cx, JSObject* parent);
+JSBool InitTypeClasses(JSContext* cx, JSHandleObject parent);
 
-JSBool ConvertToJS(JSContext* cx, JSObject* typeObj, JSObject* dataObj,
+JSBool ConvertToJS(JSContext* cx, JSHandleObject typeObj, JSHandleObject dataObj,
   void* data, bool wantPrimitive, bool ownResult, jsval* result);
 
 JSBool ImplicitConvert(JSContext* cx, jsval val, JSObject* targetType,
   void* buffer, bool isArgument, bool* freePointer);
 
-JSBool ExplicitConvert(JSContext* cx, jsval val, JSObject* targetType,
+JSBool ExplicitConvert(JSContext* cx, jsval val, JSHandleObject targetType,
   void* buffer);
 
 /*******************************************************************************
@@ -353,6 +336,8 @@ JSBool ExplicitConvert(JSContext* cx, jsval val, JSObject* targetType,
 
 enum CTypesGlobalSlot {
   SLOT_CALLBACKS = 0, // pointer to JSCTypesCallbacks struct
+  SLOT_ERRNO = 1,     // jsval for latest |errno|
+  SLOT_LASTERROR = 2, // jsval for latest |GetLastError|, used only with Windows
   CTYPESGLOBAL_SLOTS
 };
 
@@ -373,7 +358,9 @@ enum CTypeProtoSlot {
   SLOT_FUNCTIONDATAPROTO = 8,  // common ancestor of all CData objects of FunctionType
   SLOT_INT64PROTO        = 9,  // ctypes.Int64.prototype object
   SLOT_UINT64PROTO       = 10, // ctypes.UInt64.prototype object
-  SLOT_CLOSURECX         = 11, // JSContext for use with FunctionType closures
+  SLOT_CTYPES            = 11, // ctypes object
+  SLOT_OURDATAPROTO      = 12, // the data prototype corresponding to this object
+  SLOT_CLOSURECX         = 13, // JSContext for use with FunctionType closures
   CTYPEPROTO_SLOTS
 };
 
@@ -410,6 +397,16 @@ enum CClosureSlot {
   CCLOSURE_SLOTS
 };
 
+enum CDataFinalizerSlot {
+  // The type of the value (a CType JSObject).
+  // We hold it to permit ImplicitConvert and ToSource.
+  SLOT_DATAFINALIZER_VALTYPE           = 0,
+  // The type of the function used at finalization (a CType JSObject).
+  // We hold it to permit |ToSource|.
+  SLOT_DATAFINALIZER_CODETYPE          = 1,
+  CDATAFINALIZER_SLOTS
+};
+
 enum TypeCtorSlot {
   SLOT_FN_CTORPROTO = 0 // ctypes.{Pointer,Array,Struct}Type.prototype
   // JSFunction objects always get exactly two slots.
@@ -430,47 +427,48 @@ enum Int64FunctionSlot {
 *******************************************************************************/
 
 namespace CType {
-  JSObject* Create(JSContext* cx, JSObject* typeProto, JSObject* dataProto,
+  JSObject* Create(JSContext* cx, JSHandleObject typeProto, JSHandleObject dataProto,
     TypeCode type, JSString* name, jsval size, jsval align, ffi_type* ffiType);
 
   JSObject* DefineBuiltin(JSContext* cx, JSObject* parent, const char* propName,
     JSObject* typeProto, JSObject* dataProto, const char* name, TypeCode type,
     jsval size, jsval align, ffi_type* ffiType);
 
-  bool IsCType(JSContext* cx, JSObject* obj);
-  TypeCode GetTypeCode(JSContext* cx, JSObject* typeObj);
-  bool TypesEqual(JSContext* cx, JSObject* t1, JSObject* t2);
-  size_t GetSize(JSContext* cx, JSObject* obj);
-  bool GetSafeSize(JSContext* cx, JSObject* obj, size_t* result);
-  bool IsSizeDefined(JSContext* cx, JSObject* obj);
-  size_t GetAlignment(JSContext* cx, JSObject* obj);
+  bool IsCType(JSObject* obj);
+  bool IsCTypeProto(JSObject* obj);
+  TypeCode GetTypeCode(JSObject* typeObj);
+  bool TypesEqual(JSObject* t1, JSObject* t2);
+  size_t GetSize(JSObject* obj);
+  bool GetSafeSize(JSObject* obj, size_t* result);
+  bool IsSizeDefined(JSObject* obj);
+  size_t GetAlignment(JSObject* obj);
   ffi_type* GetFFIType(JSContext* cx, JSObject* obj);
-  JSString* GetName(JSContext* cx, JSObject* obj);
-  JSObject* GetProtoFromCtor(JSContext* cx, JSObject* obj, CTypeProtoSlot slot);
-  JSObject* GetProtoFromType(JSContext* cx, JSObject* obj, CTypeProtoSlot slot);
-  JSCTypesCallbacks* GetCallbacksFromType(JSContext* cx, JSObject* obj);
+  JSString* GetName(JSContext* cx, JSHandleObject obj);
+  JSObject* GetProtoFromCtor(JSObject* obj, CTypeProtoSlot slot);
+  JSObject* GetProtoFromType(JSObject* obj, CTypeProtoSlot slot);
+  JSCTypesCallbacks* GetCallbacksFromType(JSObject* obj);
 }
 
 namespace PointerType {
-  JSObject* CreateInternal(JSContext* cx, JSObject* baseType);
+  JSObject* CreateInternal(JSContext* cx, JSHandleObject baseType);
 
-  JSObject* GetBaseType(JSContext* cx, JSObject* obj);
+  JSObject* GetBaseType(JSObject* obj);
 }
 
 namespace ArrayType {
-  JSObject* CreateInternal(JSContext* cx, JSObject* baseType, size_t length,
+  JSObject* CreateInternal(JSContext* cx, JSHandleObject baseType, size_t length,
     bool lengthDefined);
 
-  JSObject* GetBaseType(JSContext* cx, JSObject* obj);
-  size_t GetLength(JSContext* cx, JSObject* obj);
-  bool GetSafeLength(JSContext* cx, JSObject* obj, size_t* result);
+  JSObject* GetBaseType(JSObject* obj);
+  size_t GetLength(JSObject* obj);
+  bool GetSafeLength(JSObject* obj, size_t* result);
   ffi_type* BuildFFIType(JSContext* cx, JSObject* obj);
 }
 
 namespace StructType {
   JSBool DefineInternal(JSContext* cx, JSObject* typeObj, JSObject* fieldsObj);
 
-  const FieldInfoHash* GetFieldInfo(JSContext* cx, JSObject* obj);
+  const FieldInfoHash* GetFieldInfo(JSObject* obj);
   const FieldInfo* LookupField(JSContext* cx, JSObject* obj, JSFlatString *name);
   JSObject* BuildFieldsArray(JSContext* cx, JSObject* obj);
   ffi_type* BuildFFIType(JSContext* cx, JSObject* obj);
@@ -478,40 +476,42 @@ namespace StructType {
 
 namespace FunctionType {
   JSObject* CreateInternal(JSContext* cx, jsval abi, jsval rtype,
-    jsval* argtypes, jsuint arglen);
+    jsval* argtypes, unsigned arglen);
 
   JSObject* ConstructWithObject(JSContext* cx, JSObject* typeObj,
     JSObject* refObj, PRFuncPtr fnptr, JSObject* result);
 
-  FunctionInfo* GetFunctionInfo(JSContext* cx, JSObject* obj);
-  JSObject* GetLibrary(JSContext* cx, JSObject* obj);
-  void BuildSymbolName(JSContext* cx, JSString* name, JSObject* typeObj,
+  FunctionInfo* GetFunctionInfo(JSObject* obj);
+  void BuildSymbolName(JSString* name, JSObject* typeObj,
     AutoCString& result);
 }
 
 namespace CClosure {
-  JSObject* Create(JSContext* cx, JSObject* typeObj, JSObject* fnObj,
-    JSObject* thisObj, PRFuncPtr* fnptr);
+  JSObject* Create(JSContext* cx, JSHandleObject typeObj, JSHandleObject fnObj,
+    JSHandleObject thisObj, jsval errVal, PRFuncPtr* fnptr);
 }
 
 namespace CData {
-  JSObject* Create(JSContext* cx, JSObject* typeObj, JSObject* refObj,
+  JSObject* Create(JSContext* cx, JSHandleObject typeObj, JSHandleObject refObj,
     void* data, bool ownResult);
 
-  JSObject* GetCType(JSContext* cx, JSObject* dataObj);
-  void* GetData(JSContext* cx, JSObject* dataObj);
-  bool IsCData(JSContext* cx, JSObject* obj);
+  JSObject* GetCType(JSObject* dataObj);
+  void* GetData(JSObject* dataObj);
+  bool IsCData(JSObject* obj);
+  bool IsCDataProto(JSObject* obj);
 
   // Attached by JSAPI as the function 'ctypes.cast'
-  JSBool Cast(JSContext* cx, uintN argc, jsval* vp);
+  JSBool Cast(JSContext* cx, unsigned argc, jsval* vp);
+  // Attached by JSAPI as the function 'ctypes.getRuntime'
+  JSBool GetRuntime(JSContext* cx, unsigned argc, jsval* vp);
 }
 
 namespace Int64 {
-  bool IsInt64(JSContext* cx, JSObject* obj);
+  bool IsInt64(JSObject* obj);
 }
 
 namespace UInt64 {
-  bool IsUInt64(JSContext* cx, JSObject* obj);
+  bool IsUInt64(JSObject* obj);
 }
 
 }
