@@ -11,6 +11,8 @@
 #include "TemplateLib.h"
 #include "Utility.h"
 
+#define JS_UINT32_MAX        4294967295U
+
 namespace js {
 
 class TempAllocPolicy;
@@ -290,8 +292,8 @@ class HashTable : private AllocPolicy
     {
         /* Rely on compiler "constant overflow warnings". */
         JS_STATIC_ASSERT(((sMaxInit * sInvMaxAlpha) >> 7) < sMaxCapacity);
-        JS_STATIC_ASSERT((sMaxCapacity * sInvMaxAlpha) <= UINT32_MAX);
-        JS_STATIC_ASSERT((sMaxCapacity * sizeof(Entry)) <= UINT32_MAX);
+        JS_STATIC_ASSERT((sMaxCapacity * sInvMaxAlpha) <= JS_UINT32_MAX);
+        JS_STATIC_ASSERT((sMaxCapacity * sizeof(Entry)) <= JS_UINT32_MAX);
     }
 
     static bool isLiveHash(HashNumber hash)
