@@ -1,0 +1,21 @@
+bug838915-JS_STANDALONE.patch # approval-mozilla-esr17?
+bug835551-required-defines.patch # Landed on m-c, needs green try run + landing on esr17
+bug831552-install-headers.patch # approval-mozilla-esr17?
+
+bug809430-add-symbol-versions.patch # r+, needs landing on m-i. Unneeded?
+
+bug812265-bump-JS_VERSION.patch # r+, carrying rebased version, needs landing on esr17
+
+bug812265-setup-versioning_3.patch # r+ glandium.
+bug812265-versioned-MOZ_JS_LIBS_2.patch # r+ glandium.
+bug812265-versioned-js-config.patch # r+ glandium.
+
+bug842889-fix-version.patch # No flags.
+
+UNFILED-sparc64-disable-yarr.patch # From Bug 735599 Comment 42.
+bug648721-openbsd-SO_VERSION.patch # Landed on m-c.
+bug618485-jsuword-payload.patch # Not landed on m-c (accidental? ask luke).
+
+quell-common-warnings.patch # Could be landed, but we can carry it separately.
+quell-jsversion-warning.patch # Should not be landed.
+

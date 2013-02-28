@@ -773,6 +773,7 @@ JSRuntime::JSRuntime()
     gcDynamicHeapGrowth(false),
     gcDynamicMarkSlice(false),
     gcShouldCleanUpEverything(false),
+    gcGrayBitsValid(false),
     gcIsNeeded(0),
     gcWeakMapList(NULL),
     gcStats(thisFromCtor()),
@@ -1408,7 +1409,7 @@ JS_SetJitHardening(JSRuntime *rt, JSBool enabled)
 JS_PUBLIC_API(const char *)
 JS_GetImplementationVersion(void)
 {
-    return "JavaScript-C 1.8.8+ 2013-01-02";
+    return "JavaScript-C " MOZILLA_VERSION;
 }
 
 JS_PUBLIC_API(void)

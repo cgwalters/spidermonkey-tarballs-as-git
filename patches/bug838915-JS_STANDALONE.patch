@@ -1,0 +1,31 @@
+From eb6750e5faa460a1535d06baf2828ef3c8cf925a Mon Sep 17 00:00:00 2001
+From: Tim Lunn <tim@feathertop.org>
+Date: Tue, 12 Feb 2013 15:16:25 +1100
+Subject: [PATCH 15/24] Bug 838915 - Add a JS_STANDALONE configure/make
+ variable
+
+---
+ js/src/configure.in | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/js/src/configure.in b/js/src/configure.in
+index 939d231..e5962d6 100644
+--- a/js/src/configure.in
++++ b/js/src/configure.in
+@@ -145,6 +145,13 @@ else
+ fi
+ AC_SUBST(JS_SHARED_LIBRARY)
+ 
++if test "$JS_STANDALONE" = no; then
++  JS_STANDALONE=
++else
++  JS_STANDALONE=1
++fi
++AC_SUBST(JS_STANDALONE)
++
+ MOZ_ARG_WITH_STRING(gonk,
+ [  --with-gonk=DIR
+                location of gonk dir],
+-- 
+1.8.1.2
+

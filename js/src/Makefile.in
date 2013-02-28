@@ -33,14 +33,12 @@ endif
 
 TEST_DIRS += tests
 
-SRCREL_VERSION      = 1.0.0
-SRCREL_ABI_VERSION  := $(word 1,$(subst ., ,$(SRCREL_VERSION))).$(word 2,$(subst ., ,$(SRCREL_VERSION)))
-
-MODULE		    = js
-ifeq (,$(HOST_BIN_SUFFIX))
-LIBRARY_NAME	    = mozjs188
+ifdef JS_STANDALONE
+MODULE		    = js-@MOZJS_MAJOR_VERSION@.@MOZJS_MINOR_VERSION@@MOZJS_ALPHA@
+LIBRARY_NAME	    = mozjs-@MOZJS_MAJOR_VERSION@.@MOZJS_MINOR_VERSION@@MOZJS_ALPHA@
 else
-LIBRARY_NAME	    = mozjs188-$(SRCREL_ABI_VERSION)
+LIBRARY_NAME	    = mozjs
+MODULE		    = js
 endif
 STATIC_LIBRARY_NAME = js_static
 GRE_MODULE	    = 1
@@ -220,6 +218,7 @@ EXPORTS_js = \
 		HashTable.h \
 		LegacyIntTypes.h \
 		MemoryMetrics.h \
+		RequiredDefines.h \
 		TemplateLib.h \
 		Utility.h \
 		Vector.h \
@@ -329,7 +328,7 @@ CPPSRCS += ExecutableAllocatorOS2.cpp \
            $(NONE)
 endif
 
-ifneq (,$(filter arm% sparc %86 x86_64 mips%,$(TARGET_CPU)))
+ifneq (,$(filter arm% sparc* %86 x86_64 mips%,$(TARGET_CPU)))
 ENABLE_YARR_JIT = 1
 DEFINES += -DENABLE_YARR_JIT=1
 
@@ -442,6 +441,12 @@ ifeq (,$(MOZ_GLUE_PROGRAM_LDFLAGS))
 # "exported" mfbt symbols on its behalf when we use its headers.
 include $(MFBT_ROOT)/sources.mk
 DEFINES += -DIMPL_MFBT
+endif
+
+# ensure symbol versions of shared library on linux do not conflict with those in libxul
+ifeq (Linux,$(OS_TARGET))
+EXTRA_DSO_LDOPTS += -Wl,-version-script,symverscript
+EXTRA_DEPS += symverscript
 endif
 
 EXTRA_DSO_LDOPTS += $(NSPR_LIBS)
@@ -559,7 +564,7 @@ JITFLAGS = ,m,am,amd,n,mn,amn,amdn,mdn
 check-jit-test::
 	$(wildcard $(RUN_TEST_PROGRAM)) $(PYTHON) -u $(srcdir)/jit-test/jit_test.py \
 	        --no-slow --no-progress --tinderbox --jitflags=$(JITFLAGS) $(JITTEST_VALGRIND_FLAG) \
-	        $(DIST)/bin/js$(BIN_SUFFIX)
+	        $(DIST)/bin/$(JS_SHELL_NAME)$(BIN_SUFFIX)
 
 check:: check-jit-test
 
@@ -576,7 +581,7 @@ check-jstests:
 				--no-extensions \
 				--timeout 300 \
 				--args="`echo $$f | sed 's/\(.\)/ -\1/g'`" \
-				$(DIST)/bin/js$(BIN_SUFFIX); \
+				$(DIST)/bin/$(JS_SHELL_NAME)$(BIN_SUFFIX); \
 			RC=$$(( $$RC || $$?)); \
 		done; \
 	exit $$RC
@@ -733,7 +738,11 @@ endif
 # - OS_LIBS includes libraries selected by the configure script.
 # - EXTRA_LIBS includes libraries selected by this Makefile.
 JS_CONFIG_LIBS=$(EXTRA_DSO_LDOPTS) $(OS_LIBS) $(EXTRA_LIBS)
+ifdef GNU_CC
 JS_CONFIG_MOZ_JS_LIBS=-L$(libdir) -l$(LIBRARY_NAME)
+else
+JS_CONFIG_MOZ_JS_LIBS=$(libdir)/$(LIBRARY_NAME).lib
+endif
 
 # The configure script invokes this rule explicitly at configure time!
 # It's important that js-config be ready by the time we're done
@@ -747,41 +756,84 @@ JS_CONFIG_MOZ_JS_LIBS=-L$(libdir) -l$(LIBRARY_NAME)
 # avoid trying to re-compute all that in the configure script, we just
 # have the configure script generate this Makefile, and then invoke
 # this rule.
-at=@
-js-config: js-config.in Makefile $(DEPTH)/config/autoconf.mk $(topsrcdir)/config/config.mk $(topsrcdir)/config/rules.mk
-	$(RM) js-config.tmp
-	sed < $< > js-config.tmp \
-	-e 's|$(at)prefix$(at)|$(prefix)|' \
-	-e 's|$(at)exec_prefix$(at)|$(exec_prefix)|' \
-	-e 's|$(at)includedir$(at)|$(includedir)|' \
-	-e 's|$(at)libdir$(at)|$(libdir)|' \
-	-e 's|$(at)MOZILLA_VERSION$(at)|$(MOZILLA_VERSION)|' \
-	-e 's|$(at)LIBRARY_NAME$(at)|$(LIBRARY_NAME)|' \
-	-e 's|$(at)NSPR_CFLAGS$(at)|$(NSPR_CFLAGS)|' \
-	-e 's|$(at)JS_CONFIG_LIBS$(at)|$(JS_CONFIG_LIBS)|' \
-	-e 's|$(at)MOZ_JS_LIBS$(at)|$(JS_CONFIG_MOZ_JS_LIBS)|' \
-	&& mv js-config.tmp $@ && chmod +x $@
 
-SCRIPTS = js-config
-SDK_BINARY = js-config
+# set the various definitions that will be substituted for js-config
+# and for the pkg-config .pc file
+JS_CONFIG_SUBSTITUTIONS=\
+	-Dprefix="$(prefix)" \
+	-Dexec_prefix="$(exec_prefix)" \
+	-Dincludedir="$(includedir)" \
+	-Dlibdir="$(libdir)" \
+	-DMODULE="$(MODULE)" \
+	-DMOZILLA_VERSION="$(MOZILLA_VERSION)" \
+	-DLIBRARY_NAME="$(LIBRARY_NAME)" \
+	-DJS_CONFIG_LIBS="$(JS_CONFIG_LIBS)" \
+	-DJS_CONFIG_MOZ_JS_LIBS="$(JS_CONFIG_MOZ_JS_LIBS)" \
+	-DMOZJS_MAJOR_VERSION="$(MOZJS_MAJOR_VERSION)" \
+	-DMOZJS_MINOR_VERSION="$(MOZJS_MINOR_VERSION)" \
+	-DMOZJS_PATCH_VERSION="$(MOZJS_PATCH_VERSION)" \
+	-DMOZJS_ALPHA="$(MOZJS_ALPHA)" \
+	-DNSPR_CFLAGS="$(NSPR_CFLAGS)" \
+	-DNSPR_PKGCONF_CHECK="$(NSPR_PKGCONF_CHECK)"
 
-pkg_config_files = \
-	mozjs188.pc \
-	$(NULL)
+$(JS_CONFIG_NAME): js-config.in Makefile $(DEPTH)/config/autoconf.mk $(topsrcdir)/config/config.mk $(topsrcdir)/config/rules.mk
+	$(RM) $@.tmp
+	$(PYTHON) $(topsrcdir)/config/Preprocessor.py $(JS_CONFIG_SUBSTITUTIONS) $< > $@.tmp \
+	&& mv $@.tmp $@ && chmod +x $@
 
-GARBAGE += $(pkg_config_files)
+SCRIPTS = $(JS_CONFIG_NAME)
+SDK_BINARY = $(JS_CONFIG_NAME)
 
-%.pc: $(srcdir)/%.pc.in Makefile
-	cat $< | sed \
-	-e "s|%prefix%|$(prefix)|" \
-	-e "s|%includedir%|$(includedir)|" \
-	-e "s|%libdir%|$(libdir)|" \
-	-e 's|%MOZILLA_VERSION%|$(MOZILLA_VERSION)|' \
-	> $@ && chmod 644 $@
+$(LIBRARY_NAME).pc: js.pc.in
+	$(PYTHON) $(topsrcdir)/config/Preprocessor.py $(JS_CONFIG_SUBSTITUTIONS) $< > $@
 
-install:: $(pkg_config_files)
-	@echo pkg_config_file: $(pkg_config_files)
-	$(SYSINSTALL) $(IFLAGS1) $^ $(DESTDIR)$(libdir)/pkgconfig
+install:: $(LIBRARY_NAME).pc
+		$(SYSINSTALL) $^ $(DESTDIR)$(libdir)/pkgconfig
+
+######################################################
+# BEGIN SpiderMonkey header installation
+#
+# Mozilla/Gecko/Firefox mostly doesn't concern itself with defining a sensible
+# install target, because it's shipping primarily packaged builds.  And even if
+# it did, those builds wouldn't really have reason to include header files.  So
+# we have to install public headers ourselves, rather than using something from
+# config/rules.mk or similar.
+#
+# The overall directory structure of the installed headers looks like so:
+#
+#   $(includedir)/
+#      $(MODULE)/
+#        jsapi.h, jspubtd.h, etc. (all of INSTALLED_HEADERS)
+#        js/
+#          js/public/* headers (all are public)
+#        ds/
+#          js/src/ds/* public headers
+#        gc/
+#          js/src/gc/* public headers
+#        mozilla/
+#          mfbt headers
+#
+# Currently $(MODULE) is just js, but we'll soon be changing it to include the
+# SpiderMonkey version, so that headers for multiple SpiderMonkey installs can
+# exist on a system at once.  (This permits embedders depending on system
+# SpiderMonkey to independently update their embeddings to newer SpiderMonkey
+# releases at different paces.)
+#
+# It is expected that embedders will then add -I$(includedir)/$(MODULE) to
+# their compiler invocations, which will then expose all of jsapi.h and friends
+# as they've always been exported.  (This will happen naturally for anyone using
+# pkgconfig systems to determine compiler/linker flags and the like.)  Headers
+# in subdirectories will show up as "mozilla/Assertions.h" and so on.  Also,
+# this system keeps #include "js/CharacterEncoding.h" in internal headers
+# working -- not that this is required, but it does simplify things.  (At some
+# point we may want to convert SpiderMonkey, and maybe Gecko, to this system, in
+# the interest of being a more conventional embedder, but it's probably a ways
+# off.)
+#
+# Eventually we'll probably trim this structure down to having the mfbt headers
+# in mozilla/, and every SpiderMonkey-specific header in js/*.  In the meantime
+# this is the structure implemented below.
+#
 
 install:: $(INSTALLED_HEADERS)
 	$(SYSINSTALL) $^ $(DESTDIR)$(includedir)/$(MODULE)
@@ -793,48 +845,25 @@ install:: $(EXPORTS_gc)
 	$(SYSINSTALL) $^ $(DESTDIR)$(includedir)/$(MODULE)/gc
 
 install:: $(EXPORTS_js)
-	$(SYSINSTALL) $^ $(DESTDIR)$(includedir)/$(MODULE)
+	$(SYSINSTALL) $^ $(DESTDIR)$(includedir)/$(MODULE)/js
 
 install:: $(EXPORTS_mozilla)
 	$(SYSINSTALL) $^ $(DESTDIR)$(includedir)/$(MODULE)/mozilla
 
+#
+# END SpiderMonkey header installation
+#############################################
+
 install:: $(SCRIPTS)
 	$(SYSINSTALL) $^ $(DESTDIR)$(bindir)
 
-ifeq (,$(HOST_BIN_SUFFIX))
-ifeq (.dylib,$(DLL_SUFFIX))
-# Mac OS X
-SHLIB_ANY_VER   := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY)
-SHLIB_ABI_VER   := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY:$(DLL_SUFFIX)=.$(SRCREL_ABI_VERSION)$(DLL_SUFFIX))
-SHLIB_EXACT_VER := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY:$(DLL_SUFFIX)=.$(SRCREL_VERSION)$(DLL_SUFFIX))
-$(SHARED_LIBRARY): EXTRA_DSO_LDOPTS += -install_name $(SHLIB_ABI_VER)
-$(SHARED_LIBRARY): EXTRA_DSO_LDOPTS += -current_version $(SRCREL_VERSION)
-$(SHARED_LIBRARY): EXTRA_DSO_LDOPTS += -compatibility_version $(SRCREL_ABI_VERSION)
-else
-# Generic Unix / Linux
-SHLIB_ANY_VER   := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY)
-SHLIB_ABI_VER   := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY).$(SRCREL_ABI_VERSION)
-SHLIB_EXACT_VER := $(DESTDIR)$(libdir)/$(SHARED_LIBRARY).$(SRCREL_VERSION)
-$(SHARED_LIBRARY): EXTRA_DSO_LDOPTS += -Wl,-soname,$(notdir $(SHLIB_ABI_VER))
-endif
-endif
-
-install:: $(LIBRARY) $(SHARED_LIBRARY) $(IMPORT_LIBRARY)
-ifneq (,$(LIBRARY))
-	$(SYSINSTALL) $(LIBRARY) $(DESTDIR)$(libdir)
-	mv -f $(DESTDIR)$(libdir)/$(LIBRARY) $(subst $(STATIC_LIBRARY_NAME),mozjs188-$(SRCREL_ABI_VERSION),$(DESTDIR)$(libdir)/$(LIBRARY))
+install:: $(REAL_LIBRARY) $(SHARED_LIBRARY) $(IMPORT_LIBRARY)
+ifneq (,$(REAL_LIBRARY))
+	$(SYSINSTALL) $(REAL_LIBRARY) $(DESTDIR)$(libdir)
+	mv -f $(DESTDIR)$(libdir)/$(REAL_LIBRARY) $(subst $(STATIC_LIBRARY_NAME),$(LIBRARY_NAME),$(DESTDIR)$(libdir)/$(REAL_LIBRARY))
 endif
 ifneq (,$(SHARED_LIBRARY))
-ifeq (,$(HOST_BIN_SUFFIX))
-	@[ ! -h $(SHLIB_ANY_VER) ] || rm -f $(SHLIB_ANY_VER)
-endif
 	$(SYSINSTALL) $(SHARED_LIBRARY) $(DESTDIR)$(libdir)
-ifeq (,$(HOST_BIN_SUFFIX))
-	mv -f $(SHLIB_ANY_VER) $(SHLIB_EXACT_VER)
-	@[ ! -h $(SHLIB_ABI_VER) ] || rm -f $(SHLIB_ABI_VER)
-	ln -s $(notdir $(SHLIB_EXACT_VER)) $(SHLIB_ABI_VER)
-	ln -s $(notdir $(SHLIB_ABI_VER)) $(SHLIB_ANY_VER)
-endif
 endif
 ifneq (,$(IMPORT_LIBRARY))
 	$(SYSINSTALL) $(IMPORT_LIBRARY) $(DESTDIR)$(libdir)
@@ -949,4 +978,9 @@ endif
 #
 # END kludges for the Nitro assembler
 ###############################################
+
+# build target for symverscript, needs to be here otherwise it overrides 'all' as default
+symverscript: symverscript.in
+	$(PYTHON) $(topsrcdir)/config/Preprocessor.py \
+		-DVERSION="$(subst -,_,$(LIBRARY_NAME))" $< > $@
 

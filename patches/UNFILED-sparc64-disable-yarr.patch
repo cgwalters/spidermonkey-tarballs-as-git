@@ -1,0 +1,14 @@
+# HG changeset patch
+# Parent c68dca251ff080cfe33758e62ee44f87aaa1921c
+diff --git a/js/src/Makefile.in b/js/src/Makefile.in
+--- a/js/src/Makefile.in
++++ b/js/src/Makefile.in
+@@ -328,7 +328,7 @@ CPPSRCS += ExecutableAllocatorOS2.cpp \
+            $(NONE)
+ endif
+ 
+-ifneq (,$(filter arm% sparc %86 x86_64 mips%,$(TARGET_CPU)))
++ifneq (,$(filter arm% sparc* %86 x86_64 mips%,$(TARGET_CPU)))
+ ENABLE_YARR_JIT = 1
+ DEFINES += -DENABLE_YARR_JIT=1
+ 

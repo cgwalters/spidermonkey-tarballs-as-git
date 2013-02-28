@@ -277,6 +277,7 @@ template <>
 struct RootSink<JSStableString *> {
     static void dispose(JSStableString *ptr) {
         JSStableString * volatile sink;
+        (void) sink;
         sink = ptr;
     }
 };
