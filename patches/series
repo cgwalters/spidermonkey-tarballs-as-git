@@ -19,4 +19,4 @@ quell-clang-warnings.patch # The pragma stuff should be landed.
 quell-c++0x-warnings-clang.patch # Possibly should be landed.
 
 openbsd-dll-suffix.patch # Already fixed on m-c. Bug 735599, Comment 53
-bug852789-clear-selfhosting-global.patch # r+ sstangl, will land on m-c without backporting.
+bug852789-clear-selfhosting-global.patch # Landed on m-c.

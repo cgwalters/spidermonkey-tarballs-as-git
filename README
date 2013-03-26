@@ -1,6 +1,6 @@
 This directory contains SpiderMonkey 17.
 
-This release is based on revision 659ce2b0bb83 of Mozilla ESR17:
+This release is based on revision c7f42dec3730 of Mozilla ESR17:
   http://hg.mozilla.org/releases/mozilla-esr17/
 The changes in the patches/ directory were applied.
 
