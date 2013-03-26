@@ -13,6 +13,11 @@
  * code that is (only currently) mfbt-incompatible.
  */
 
+/* Suppress any warnings about c++0x extensions. */
+#if defined(__clang__)
+# pragma clang diagnostic ignored "-Wc++0x-extensions"
+#endif
+
 /*
  * MOZ_INLINE is a macro which expands to tell the compiler that the method
  * decorated with it should be inlined.  This macro is usable from C and C++

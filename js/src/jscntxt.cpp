@@ -410,6 +410,8 @@ js::DestroyContext(JSContext *cx, DestroyContextMode mode)
         /* Unpin all common atoms before final GC. */
         FinishCommonAtoms(rt);
 
+        rt->finishSelfHosting();
+
         /* Clear debugging state to remove GC roots. */
         for (CompartmentsIter c(rt); !c.done(); c.next())
             c->clearTraps(rt->defaultFreeOp());

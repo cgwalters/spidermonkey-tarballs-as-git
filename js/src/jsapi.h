@@ -32,6 +32,13 @@
 #include "js/Vector.h"
 #endif
 
+/* Silence clang warning about return type linkage. */
+#if defined(__clang__)
+# pragma clang diagnostic push
+# pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#endif
+
+
 /************************************************************************/
 
 /* JS::Value can store a full int32_t. */
@@ -6299,5 +6306,10 @@ JS_DecodeInterpretedFunction(JSContext *cx, const void *data, uint32_t length,
                              JSPrincipals *principals, JSPrincipals *originPrincipals);
 
 JS_END_EXTERN_C
+
+/* Restore initial diagnostics. */
+#if defined(__clang__)
+# pragma clang diagnostic pop
+#endif
 
 #endif /* jsapi_h___ */

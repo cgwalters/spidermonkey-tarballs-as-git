@@ -1831,6 +1831,7 @@ class TypedArrayTemplate
         JS_ASSERT(len <= length(thisTypedArrayObj) - offset);
         NativeType *dest = static_cast<NativeType*>(viewData(thisTypedArrayObj)) + offset;
         SkipRoot skip(cx, &dest);
+        (void)skip;
 
         if (ar->isDenseArray() && ar->getDenseArrayInitializedLength() >= len) {
             JS_ASSERT(ar->getArrayLength() == len);

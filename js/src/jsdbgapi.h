@@ -13,6 +13,12 @@
 #include "jsapi.h"
 #include "jsprvtd.h"
 
+/* Silence clang warning about return type linkage. */
+#if defined(__clang__)
+# pragma clang diagnostic push
+# pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#endif
+
 JS_BEGIN_EXTERN_C
 
 extern JS_PUBLIC_API(JSCrossCompartmentCall *)
@@ -525,5 +531,10 @@ extern JS_FRIEND_API(JSBool)
 js_CallContextDebugHandler(JSContext *cx);
 
 JS_END_EXTERN_C
+
+/* Restore initial diagnostics. */
+#if defined(__clang__)
+# pragma clang diagnostic pop
+#endif
 
 #endif /* jsdbgapi_h___ */

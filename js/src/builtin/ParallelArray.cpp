@@ -31,12 +31,14 @@ using namespace js::types;
 typedef ParallelArrayObject::IndexVector IndexVector;
 typedef ParallelArrayObject::IndexInfo IndexInfo;
 
+#ifdef DEBUG
 static bool
 ReportBadArg(JSContext *cx, const char *s = "")
 {
     JS_ReportErrorNumber(cx, js_GetErrorMessage, NULL, JSMSG_PAR_ARRAY_BAD_ARG, s);
     return false;
 }
+#endif // DEBUG
 
 bool
 ParallelArrayObject::IndexInfo::isInitialized() const

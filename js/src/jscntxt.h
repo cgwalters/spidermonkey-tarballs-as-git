@@ -448,6 +448,10 @@ struct JSRuntime : js::RuntimeFriendFields
     JSFunction *getSelfHostedFunction(JSContext *cx, const char *name);
     bool cloneSelfHostedValueById(JSContext *cx, jsid id, js::HandleObject holder, js::Value *vp);
 
+    void finishSelfHosting() {
+        selfHostedGlobal_ = NULL;
+    }
+
     /* Base address of the native stack for the current thread. */
     uintptr_t           nativeStackBase;
 
